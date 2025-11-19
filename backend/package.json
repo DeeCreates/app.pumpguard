@@ -1,0 +1,23 @@
+{
+  "name": "pumpguard-backend",
+  "type": "module",
+  "scripts": {
+    "dev": "npx supabase functions serve pumpguard-server --env-file ../.env.local",
+    "deploy": "npx supabase functions deploy pumpguard-server --project-ref your-project-ref",
+    "gen:types": "npx supabase gen types typescript --project-id your-project-id > ../shared/types/supabase.ts",
+    "lint": "tsc --noEmit",
+    "db:push": "npx supabase db push",
+    "db:reset": "npx supabase db reset",
+    "studio": "npx supabase studio"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.78.0",
+    "date-fns": "^2.30.0",
+    "hono": "^3.3.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.24",
+    "typescript": "^5.9.3"
+  }
+}
