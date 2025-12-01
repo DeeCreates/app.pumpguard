@@ -5,8 +5,16 @@
   "scripts": {
     "dev": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
+    "build:prod": "cd frontend && npm run build:prod",
+    "build:preview": "cd frontend && npm run build:preview",
     "preview": "cd frontend && npm run preview",
-    "lint": "cd frontend && npm run lint"
+    "lint": "cd frontend && npm run lint",
+    "type-check": "cd frontend && npm run type-check",
+    "format": "cd frontend && npm run format",
+    "vercel-build": "cd frontend && npm run build:prod",
+    "analyze": "cd frontend && npm run analyze",
+    "deploy": "cd frontend && npm run deploy",
+    "deploy:preview": "cd frontend && npm run deploy:preview"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
@@ -57,5 +65,9 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
     "vaul": "^1.1.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }

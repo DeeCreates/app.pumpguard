@@ -25,7 +25,6 @@ import {
   TrendingUp,
   AlertTriangle,
   RefreshCw,
-  Filter,
   Search,
   X,
   Edit,
@@ -70,7 +69,307 @@ interface BankDepositsProps {
   showAllStations?: boolean;
 }
 
-// Enhanced export function with multiple formats
+interface DepositFormProps {
+  isEdit?: boolean;
+  deposit?: BankDeposit | null;
+  availableStations: any[];
+  onSubmit: (formData: any) => Promise<void>;
+  onCancel: () => void;
+  loading?: boolean;
+  user?: any;
+}
+
+// Available banks in Ghana with "Other Bank" option
+const availableBanks = [
+  'GCB Bank',
+  'Ecobank Ghana',
+  'Stanbic Bank',
+  'Standard Chartered',
+  'Zenith Bank',
+  'Fidelity Bank',
+  'Absa Bank',
+  'Consolidated Bank',
+  'Cal Bank',
+  'First National Bank',
+  'Republic Bank',
+  'Universal Merchant Bank',
+  'Bank of Africa',
+  'Prudential Bank',
+  'OmniBSIC Bank',
+  'Other Bank'
+];
+
+// Standalone DepositForm Component
+const DepositForm: React.FC<DepositFormProps> = React.memo(({ 
+  isEdit = false, 
+  deposit, 
+  availableStations, 
+  onSubmit, 
+  onCancel, 
+  loading = false,
+  user 
+}) => {
+  const [form, setForm] = useState(() => ({
+    station_id: deposit?.station_id || (availableStations.length > 0 ? availableStations[0].id : ''),
+    amount: deposit?.amount.toString() || '',
+    bank_name: deposit?.bank_name || 'GCB Bank',
+    account_number: deposit?.account_number || '',
+    reference_number: deposit?.reference_number || '',
+    deposited_by: deposit?.deposited_by || '',
+    notes: deposit?.notes || '',
+    deposit_date: deposit?.created_at ? deposit.created_at.split('T')[0] : new Date().toISOString().split('T')[0]
+  }));
+
+  const [customBankName, setCustomBankName] = useState('');
+  const [showCustomBank, setShowCustomBank] = useState(false);
+  const [customBanks, setCustomBanks] = useState<string[]>([]);
+
+  // Handle form field changes
+  const handleFieldChange = (field: string, value: string) => {
+    setForm(prev => ({
+      ...prev,
+      [field]: value
+    }));
+
+    if (field === 'bank_name' && value === 'Other Bank') {
+      setShowCustomBank(true);
+      setForm(prev => ({ ...prev, bank_name: '' }));
+    } else if (field === 'bank_name') {
+      setShowCustomBank(false);
+      setCustomBankName('');
+    }
+  };
+
+  // Handle custom bank name change
+  const handleCustomBankChange = (value: string) => {
+    setCustomBankName(value);
+    setForm(prev => ({
+      ...prev,
+      bank_name: value
+    }));
+  };
+
+  // Handle form submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    const finalFormData = {
+      ...form,
+      bank_name: showCustomBank && customBankName ? customBankName : form.bank_name
+    };
+
+    // Add custom bank to list if it's new
+    if (showCustomBank && customBankName && !availableBanks.includes(customBankName) && !customBanks.includes(customBankName)) {
+      setCustomBanks(prev => [...prev, customBankName]);
+    }
+
+    await onSubmit(finalFormData);
+  };
+
+  // Combine standard and custom banks
+  const allBanks = [...availableBanks, ...customBanks.filter(bank => !availableBanks.includes(bank))];
+
+  const currentStationId = form.station_id;
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto pr-2 space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Station Selection */}
+          {(user?.role === 'admin' || user?.role === 'omc') && (
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="station" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+                <Building2 className="w-4 h-4" />
+                Station <span className="text-red-500">*</span>
+              </Label>
+              <select
+                id="station"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white transition-colors"
+                value={currentStationId}
+                onChange={(e) => handleFieldChange('station_id', e.target.value)}
+                disabled={isEdit}
+                required
+              >
+                <option value="">Select Station</option>
+                {availableStations.map(station => (
+                  <option key={station.id} value={station.id}>
+                    {station.name} {station.omcs?.name ? `(${station.omcs.name})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Amount */}
+          <div className="space-y-2">
+            <Label htmlFor="amount" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <DollarSign className="w-4 h-4" />
+              Amount (₵) <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="amount"
+              type="number"
+              step="0.01"
+              min="0"
+              value={form.amount}
+              onChange={(e) => handleFieldChange('amount', e.target.value)}
+              placeholder="0.00"
+              className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              required
+            />
+          </div>
+
+          {/* Deposit Date */}
+          <div className="space-y-2">
+            <Label htmlFor="deposit_date" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Calendar className="w-4 h-4" />
+              Deposit Date <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="deposit_date"
+              type="date"
+              value={form.deposit_date}
+              onChange={(e) => handleFieldChange('deposit_date', e.target.value)}
+              className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              required
+            />
+          </div>
+
+          {/* Bank Name */}
+          <div className="space-y-2">
+            <Label htmlFor="bank_name" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <Banknote className="w-4 h-4" />
+              Bank Name <span className="text-red-500">*</span>
+            </Label>
+            <select
+              id="bank_name"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white transition-colors"
+              value={showCustomBank ? 'Other Bank' : form.bank_name}
+              onChange={(e) => handleFieldChange('bank_name', e.target.value)}
+              required
+            >
+              {allBanks.map(bank => (
+                <option key={bank} value={bank}>{bank}</option>
+              ))}
+            </select>
+            
+            {/* Custom Bank Input */}
+            {showCustomBank && (
+              <div className="mt-2">
+                <Input
+                  type="text"
+                  value={customBankName}
+                  onChange={(e) => handleCustomBankChange(e.target.value)}
+                  placeholder="Enter bank name"
+                  className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  required={showCustomBank}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Account Number */}
+          <div className="space-y-2">
+            <Label htmlFor="account_number" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <CreditCard className="w-4 h-4" />
+              Account Number <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="account_number"
+              value={form.account_number}
+              onChange={(e) => handleFieldChange('account_number', e.target.value)}
+              placeholder="1234567890"
+              className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              required
+              minLength={8}
+            />
+          </div>
+
+          {/* Reference Number */}
+          <div className="space-y-2">
+            <Label htmlFor="reference_number" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <FileText className="w-4 h-4" />
+              Reference Number <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="reference_number"
+              value={form.reference_number}
+              onChange={(e) => handleFieldChange('reference_number', e.target.value)}
+              placeholder="REF-123456"
+              className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              required
+            />
+          </div>
+
+          {/* Deposited By */}
+          <div className="space-y-2">
+            <Label htmlFor="deposited_by" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+              <User className="w-4 h-4" />
+              Deposited By <span className="text-red-500">*</span>
+            </Label>
+            <Input
+              id="deposited_by"
+              value={form.deposited_by}
+              onChange={(e) => handleFieldChange('deposited_by', e.target.value)}
+              placeholder="Staff name"
+              className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              required
+            />
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div className="space-y-2">
+          <Label htmlFor="notes" className="text-sm font-medium text-gray-700 flex items-center gap-1">
+            <AlertTriangle className="w-4 h-4" />
+            Notes (Optional)
+          </Label>
+          <textarea
+            id="notes"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none bg-white transition-colors"
+            rows={4}
+            value={form.notes}
+            onChange={(e) => handleFieldChange('notes', e.target.value)}
+            placeholder="Additional details, remarks, or special instructions..."
+          />
+        </div>
+      </div>
+
+      {/* Form Actions */}
+      <div className="flex-shrink-0 pt-6 mt-6 border-t border-gray-200">
+        <div className="flex gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onCancel}
+            className="flex-1 border-gray-300 hover:bg-gray-50"
+            disabled={loading}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors"
+            disabled={loading}
+          >
+            {loading ? (
+              <div className="flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                {isEdit ? 'Updating...' : 'Recording...'}
+              </div>
+            ) : (
+              isEdit ? 'Update Deposit' : 'Record Deposit'
+            )}
+          </Button>
+        </div>
+      </div>
+    </form>
+  );
+});
+
+DepositForm.displayName = 'DepositForm';
+
+// Export function
 const exportData = (data: any, filename: string, format: 'json' | 'csv' = 'json') => {
   let blob: Blob;
   let mimeType: string;
@@ -131,51 +430,10 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
   const [sortField, setSortField] = useState<string>('created_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [expandedDeposit, setExpandedDeposit] = useState<string | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   
   const { toast } = useToast();
   const { user } = useAuth();
-
-  // FIXED: Use useCallback to memoize form state initialization
-  const initializeForm = useCallback(() => ({
-    station_id: stationId || (availableStations.length > 0 ? availableStations[0].id : ''),
-    amount: '',
-    bank_name: 'GCB Bank',
-    account_number: '',
-    reference_number: '',
-    deposited_by: '',
-    notes: '',
-    deposit_date: new Date().toISOString().split('T')[0]
-  }), [stationId, availableStations]);
-
-  const [form, setForm] = useState(initializeForm);
-  const [editForm, setEditForm] = useState({
-    amount: '',
-    bank_name: '',
-    account_number: '',
-    reference_number: '',
-    deposited_by: '',
-    notes: '',
-    deposit_date: ''
-  });
-
-  // Available banks in Ghana
-  const availableBanks = [
-    'GCB Bank',
-    'Ecobank Ghana',
-    'Stanbic Bank',
-    'Standard Chartered',
-    'Zenith Bank',
-    'Fidelity Bank',
-    'Absa Bank',
-    'Consolidated Bank',
-    'Cal Bank',
-    'First National Bank',
-    'Republic Bank',
-    'Universal Merchant Bank',
-    'Bank of Africa',
-    'Prudential Bank',
-    'OmniBSIC Bank'
-  ];
 
   useEffect(() => {
     initializeData();
@@ -185,23 +443,14 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
     applyFilters();
   }, [deposits, selectedStation, statusFilter, dateRange, searchTerm, sortField, sortDirection]);
 
-  // FIXED: Reset form when dialog opens/closes
-  useEffect(() => {
-    if (showDialog) {
-      setForm(initializeForm());
-    }
-  }, [showDialog, initializeForm]);
-
   const initializeData = async () => {
     try {
       setLoading(true);
       
-      // Set default station for station managers
       if (user?.role === 'station_manager' && user.station_id) {
         setSelectedStation(user.station_id);
       }
 
-      // Load stations and deposits in parallel
       await Promise.all([
         loadDeposits(),
         loadAvailableStations()
@@ -212,7 +461,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       toast({
         title: "Error",
         description: "Failed to load bank deposit data",
-        variant: "destructive"
+        variant: "destructive",
       });
     } finally {
       setLoading(false);
@@ -224,10 +473,8 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       let stationsResponse;
       
       if (user?.role === 'omc' && user.omc_id) {
-        // OMC can view only their stations
         stationsResponse = await api.getStationsByOMC(user.omc_id);
       } else if (user?.role === 'station_manager' && user.station_id) {
-        // Station managers can only view their station
         const allStations = await api.getAllStations();
         if (allStations.success) {
           stationsResponse = {
@@ -236,7 +483,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
           };
         }
       } else if (user?.role === 'dealer' && user.dealer_id) {
-        // Dealers can view only their stations
         const allStations = await api.getAllStations();
         if (allStations.success) {
           stationsResponse = {
@@ -245,10 +491,8 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
           };
         }
       } else if (user?.role === 'admin') {
-        // Admin can view all stations
         stationsResponse = await api.getAllStations();
       } else {
-        // Default to empty for other roles
         stationsResponse = { success: true, data: [] };
       }
 
@@ -257,12 +501,16 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       }
     } catch (error) {
       console.error('Error loading stations:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load stations",
+        variant: "destructive",
+      });
     }
   };
 
   const loadDeposits = async () => {
     try {
-      // Build filters based on user role and selected station
       const filters: any = {};
       
       if (selectedStation !== 'all') {
@@ -275,7 +523,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         filters.dealer_id = user.dealer_id;
       }
 
-      // Apply date range filter
       const now = new Date();
       let startDate = new Date();
       
@@ -299,7 +546,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       if (response.success) {
         let depositsData = response.data || [];
         
-        // Additional filtering for dealers with multiple stations
         if (user?.role === 'dealer' && user.dealer_id && selectedStation === 'all') {
           const dealerStationIds = availableStations
             .filter(s => s.dealer_id === user.dealer_id)
@@ -314,7 +560,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         toast({
           title: "Error",
           description: response.error || "Failed to load deposits",
-          variant: "destructive"
+          variant: "destructive",
         });
       }
     } catch (error) {
@@ -322,7 +568,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       toast({
         title: "Error",
         description: "Failed to load bank deposits",
-        variant: "destructive"
+        variant: "destructive",
       });
     }
   };
@@ -330,17 +576,14 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
   const applyFilters = () => {
     let filtered = deposits;
 
-    // Apply station filter
     if (selectedStation !== 'all') {
       filtered = filtered.filter(deposit => deposit.station_id === selectedStation);
     }
 
-    // Apply status filter
     if (statusFilter !== 'all') {
       filtered = filtered.filter(deposit => deposit.status === statusFilter);
     }
 
-    // Apply date range filter
     if (dateRange !== 'all') {
       const now = new Date();
       let startDate = new Date();
@@ -360,7 +603,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       filtered = filtered.filter(deposit => new Date(deposit.created_at) >= startDate);
     }
 
-    // Apply search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(deposit =>
@@ -373,7 +615,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       );
     }
 
-    // Apply sorting
     filtered.sort((a, b) => {
       let aValue: any = a[sortField as keyof BankDeposit];
       let bValue: any = b[sortField as keyof BankDeposit];
@@ -400,122 +641,108 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
     }
   };
 
-  // FIXED: Stable form handlers
-  const handleFormChange = useCallback((field: string, value: string) => {
-    setForm(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  }, []);
-
-  const handleEditFormChange = useCallback((field: string, value: string) => {
-    setEditForm(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (formData: any) => {
     try {
       setFormSubmitting(true);
       
-      // Enhanced validation
-      if (!form.amount || !form.bank_name || !form.account_number || !form.reference_number || !form.deposited_by || !form.station_id) {
+      if (!formData.amount || !formData.bank_name || !formData.account_number || !formData.reference_number || !formData.deposited_by || !formData.station_id) {
         toast({
           title: "Validation Error",
           description: "Please fill in all required fields",
-          variant: "destructive"
+          variant: "destructive",
         });
         return;
       }
 
-      const amount = parseFloat(form.amount);
+      const amount = parseFloat(formData.amount);
       if (isNaN(amount) || amount <= 0) {
         toast({
           title: "Validation Error",
           description: "Please enter a valid amount greater than 0",
-          variant: "destructive"
+          variant: "destructive",
         });
         return;
       }
 
-      if (form.account_number.length < 8) {
+      if (formData.account_number.length < 8) {
         toast({
           title: "Validation Error",
           description: "Account number must be at least 8 characters",
-          variant: "destructive"
+          variant: "destructive",
         });
         return;
       }
 
       const depositData = {
-        station_id: form.station_id,
+        station_id: formData.station_id,
         amount: amount,
-        bank_name: form.bank_name,
-        account_number: form.account_number,
-        reference_number: form.reference_number,
-        deposited_by: form.deposited_by,
-        notes: form.notes || undefined,
-        deposit_date: form.deposit_date
+        bank_name: formData.bank_name,
+        account_number: formData.account_number,
+        reference_number: formData.reference_number,
+        deposited_by: formData.deposited_by,
+        notes: formData.notes || null,
+        deposit_date: formData.deposit_date
       };
 
       const response = await api.createBankDeposit(depositData);
       
       if (response.success) {
-        // Reload deposits to include the new one
         await loadDeposits();
-        
         setShowDialog(false);
-        setForm(initializeForm());
-
         toast({
           title: "Success",
           description: "Bank deposit recorded successfully",
         });
       } else {
-        toast({
-          title: "Error",
-          description: response.error || "Failed to record deposit",
-          variant: "destructive"
-        });
+        if (response.error?.includes('duplicate') || response.error?.includes('reference number')) {
+          toast({
+            title: "Duplicate Reference",
+            description: "A deposit with this reference number already exists. Please use a unique reference number.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Error",
+            description: response.error || "Failed to record deposit",
+            variant: "destructive",
+          });
+        }
       }
     } catch (error: any) {
       console.error('Error creating deposit:', error);
       toast({
         title: "Error",
-        description: error.message || "Failed to record bank deposit",
-        variant: "destructive"
+        description: "Failed to record bank deposit",
+        variant: "destructive",
       });
     } finally {
       setFormSubmitting(false);
     }
   };
 
-  const handleEdit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleEdit = async (formData: any) => {
     if (!selectedDeposit) return;
 
     try {
       setFormSubmitting(true);
 
-      const amount = parseFloat(editForm.amount);
+      const amount = parseFloat(formData.amount);
       if (isNaN(amount) || amount <= 0) {
         toast({
           title: "Validation Error",
           description: "Please enter a valid amount greater than 0",
-          variant: "destructive"
+          variant: "destructive",
         });
         return;
       }
 
       const updateData = {
         amount: amount,
-        bank_name: editForm.bank_name,
-        account_number: editForm.account_number,
-        reference_number: editForm.reference_number,
-        deposited_by: editForm.deposited_by,
-        notes: editForm.notes || undefined
+        bank_name: formData.bank_name,
+        account_number: formData.account_number,
+        reference_number: formData.reference_number,
+        deposited_by: formData.deposited_by,
+        notes: formData.notes || undefined
       };
 
       const response = await api.updateBankDeposit(selectedDeposit.id, updateData);
@@ -531,15 +758,15 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         toast({
           title: "Error",
           description: response.error || "Failed to update deposit",
-          variant: "destructive"
+          variant: "destructive",
         });
       }
     } catch (error: any) {
       console.error('Error updating deposit:', error);
       toast({
         title: "Error",
-        description: error.message || "Failed to update deposit",
-        variant: "destructive"
+        description: "Failed to update deposit",
+        variant: "destructive",
       });
     } finally {
       setFormSubmitting(false);
@@ -564,15 +791,15 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         toast({
           title: "Error",
           description: response.error || "Failed to delete deposit",
-          variant: "destructive"
+          variant: "destructive",
         });
       }
     } catch (error: any) {
       console.error('Error deleting deposit:', error);
       toast({
         title: "Error",
-        description: error.message || "Failed to delete deposit",
-        variant: "destructive"
+        description: "Failed to delete deposit",
+        variant: "destructive",
       });
     } finally {
       setFormSubmitting(false);
@@ -584,9 +811,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       const response = await api.updateBankDeposit(id, { status });
       
       if (response.success) {
-        // Reload deposits to reflect the updated status
         await loadDeposits();
-        
         toast({
           title: "Success",
           description: `Deposit status updated to ${status}`,
@@ -595,7 +820,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         toast({
           title: "Error",
           description: response.error || "Failed to update deposit status",
-          variant: "destructive"
+          variant: "destructive",
         });
       }
     } catch (error) {
@@ -603,7 +828,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       toast({
         title: "Error",
         description: "Failed to update deposit status",
-        variant: "destructive"
+        variant: "destructive",
       });
     }
   };
@@ -642,7 +867,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
       toast({
         title: "Export Failed",
         description: "Failed to export deposit data",
-        variant: "destructive"
+        variant: "destructive",
       });
     } finally {
       setExporting(false);
@@ -651,15 +876,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
 
   const openEditDialog = (deposit: BankDeposit) => {
     setSelectedDeposit(deposit);
-    setEditForm({
-      amount: deposit.amount.toString(),
-      bank_name: deposit.bank_name,
-      account_number: deposit.account_number,
-      reference_number: deposit.reference_number,
-      deposited_by: deposit.deposited_by,
-      notes: deposit.notes || '',
-      deposit_date: deposit.created_at.split('T')[0]
-    });
     setShowEditDialog(true);
   };
 
@@ -668,10 +884,46 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
     setShowDeleteDialog(true);
   };
 
-  const openDetailsDialog = (deposit: BankDeposit) => {
+const openDetailsDialog = async (deposit: BankDeposit) => {
+  try {
+    setDetailsLoading(true);
+    
+    // First, try to enhance the deposit with station data from available stations
+    let depositWithStation = deposit;
+    
+    if (!deposit.station_name) {
+      const station = availableStations.find(s => s.id === deposit.station_id);
+      if (station) {
+        depositWithStation = {
+          ...deposit,
+          station_name: station.name,
+          omc_name: station.omcs?.name || station.omc_name || ''
+        };
+      }
+    }
+    
+    setSelectedDeposit(depositWithStation);
+    setShowDetailsDialog(true);
+    
+    // Then try to fetch fresh data in background
+    try {
+      const response = await api.getBankDeposit(deposit.id);
+      if (response.success && response.data) {
+        setSelectedDeposit(response.data);
+      }
+    } catch (fetchError) {
+      // Silently fail - we already have the enhanced data
+      console.log('Background refresh failed, using cached data');
+    }
+  } catch (error) {
+    console.error('Error in openDetailsDialog:', error);
+    // Still open the dialog with basic data
     setSelectedDeposit(deposit);
     setShowDetailsDialog(true);
-  };
+  } finally {
+    setDetailsLoading(false);
+  }
+};
 
   const toggleExpandDeposit = (depositId: string) => {
     setExpandedDeposit(expandedDeposit === depositId ? null : depositId);
@@ -698,38 +950,27 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
     }
   };
 
+  // Permission checks
   const canCreateDeposit = () => {
     if (!user) return false;
-    
-    // Basic role check - allow these roles to create deposits
-    const allowedRoles = ['admin', 'omc', 'dealer', 'station_manager'];
-    if (!allowedRoles.includes(user.role)) {
-      return false;
-    }
-
-    // For admin, always allow (they can select any station)
-    if (user.role === 'admin') {
-      return true;
-    }
-
-    // For other roles, check if they have at least one station available
-    if (availableStations.length > 0) {
-      return true;
-    }
-
-    return false;
+    if (user.role === 'dealer') return false; // Dealers cannot add deposits
+    const allowedRoles = ['admin', 'omc', 'station_manager'];
+    if (!allowedRoles.includes(user.role)) return false;
+    if (user.role === 'admin') return true;
+    return availableStations.length > 0;
   };
 
   const canManageDeposits = () => {
     if (!user) return false;
-    return ['admin', 'omc', 'dealer'].includes(user.role);
+    return ['admin', 'omc'].includes(user.role); // Dealers cannot manage
   };
 
   const canEditDelete = (deposit: BankDeposit) => {
     if (!user) return false;
+    if (user.role === 'dealer') return false; // Dealers cannot edit/delete
     if (user.role === 'admin') return true;
     if (deposit.status !== 'pending') return false;
-    return ['admin', 'omc', 'dealer'].includes(user.role);
+    return ['admin', 'omc'].includes(user.role);
   };
 
   const displayDeposits = filteredDeposits.length > 0 ? filteredDeposits : deposits;
@@ -745,204 +986,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
   );
   const todayTotal = todayDeposits.reduce((sum, dep) => sum + dep.amount, 0);
 
-  // FIXED: Memoized Deposit Form Component
-  const DepositForm = React.memo(({ isEdit = false }: { isEdit?: boolean }) => {
-    const currentForm = isEdit ? editForm : form;
-    const currentStationId = isEdit ? selectedDeposit?.station_id : form.station_id;
-
-    const handleFieldChange = (field: string, value: string) => {
-      if (isEdit) {
-        handleEditFormChange(field, value);
-      } else {
-        handleFormChange(field, value);
-      }
-    };
-
-    return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 overflow-y-auto pr-2 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Station Selection */}
-            {(user?.role === 'admin' || user?.role === 'omc' || user?.role === 'dealer') && (
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="station" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                  <Building2 className="w-4 h-4" />
-                  Station <span className="text-red-500">*</span>
-                </Label>
-                <select
-                  id="station"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white transition-colors"
-                  value={currentStationId}
-                  onChange={(e) => !isEdit && handleFieldChange('station_id', e.target.value)}
-                  disabled={isEdit}
-                  required
-                >
-                  <option value="">Select Station</option>
-                  {availableStations.map(station => (
-                    <option key={station.id} value={station.id}>
-                      {station.name} {station.omcs?.name ? `(${station.omcs.name})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Amount */}
-            <div className="space-y-2">
-              <Label htmlFor="amount" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <DollarSign className="w-4 h-4" />
-                Amount (₵) <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="amount"
-                type="number"
-                step="0.01"
-                min="0"
-                value={currentForm.amount}
-                onChange={(e) => handleFieldChange('amount', e.target.value)}
-                placeholder="0.00"
-                className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                required
-              />
-            </div>
-
-            {/* Deposit Date */}
-            <div className="space-y-2">
-              <Label htmlFor="deposit_date" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <Calendar className="w-4 h-4" />
-                Deposit Date <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="deposit_date"
-                type="date"
-                value={currentForm.deposit_date}
-                onChange={(e) => handleFieldChange('deposit_date', e.target.value)}
-                className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                required
-              />
-            </div>
-
-            {/* Bank Name */}
-            <div className="space-y-2">
-              <Label htmlFor="bank_name" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <Banknote className="w-4 h-4" />
-                Bank Name <span className="text-red-500">*</span>
-              </Label>
-              <select
-                id="bank_name"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white transition-colors"
-                value={currentForm.bank_name}
-                onChange={(e) => handleFieldChange('bank_name', e.target.value)}
-                required
-              >
-                {availableBanks.map(bank => (
-                  <option key={bank} value={bank}>{bank}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Account Number */}
-            <div className="space-y-2">
-              <Label htmlFor="account_number" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <CreditCard className="w-4 h-4" />
-                Account Number <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="account_number"
-                value={currentForm.account_number}
-                onChange={(e) => handleFieldChange('account_number', e.target.value)}
-                placeholder="1234567890"
-                className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                required
-                minLength={8}
-              />
-            </div>
-
-            {/* Reference Number */}
-            <div className="space-y-2">
-              <Label htmlFor="reference_number" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <FileText className="w-4 h-4" />
-                Reference Number <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="reference_number"
-                value={currentForm.reference_number}
-                onChange={(e) => handleFieldChange('reference_number', e.target.value)}
-                placeholder="REF-123456"
-                className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                required
-              />
-            </div>
-
-            {/* Deposited By */}
-            <div className="space-y-2">
-              <Label htmlFor="deposited_by" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-                <User className="w-4 h-4" />
-                Deposited By <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="deposited_by"
-                value={currentForm.deposited_by}
-                onChange={(e) => handleFieldChange('deposited_by', e.target.value)}
-                placeholder="Staff name"
-                className="w-full border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                required
-              />
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div className="space-y-2">
-            <Label htmlFor="notes" className="text-sm font-medium text-gray-700 flex items-center gap-1">
-              <AlertTriangle className="w-4 h-4" />
-              Notes (Optional)
-            </Label>
-            <textarea
-              id="notes"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none bg-white transition-colors"
-              rows={4}
-              value={currentForm.notes}
-              onChange={(e) => handleFieldChange('notes', e.target.value)}
-              placeholder="Additional details, remarks, or special instructions..."
-            />
-          </div>
-        </div>
-
-        {/* Form Actions - Always visible at the bottom */}
-        <div className="flex-shrink-0 pt-6 mt-6 border-t border-gray-200">
-          <div className="flex gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => isEdit ? setShowEditDialog(false) : setShowDialog(false)}
-              className="flex-1 border-gray-300 hover:bg-gray-50"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={isEdit ? handleEdit : handleSubmit}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors"
-              disabled={formSubmitting}
-            >
-              {formSubmitting ? (
-                <div className="flex items-center justify-center gap-2">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  {isEdit ? 'Updating...' : 'Recording...'}
-                </div>
-              ) : (
-                isEdit ? 'Update Deposit' : 'Record Deposit'
-              )}
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  });
-
-  DepositForm.displayName = 'DepositForm';
-
-  // Loading skeletons (keep the same as before)
+  // Loading skeletons
   const StatsSkeleton = () => (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
       {Array.from({ length: 4 }).map((_, i) => (
@@ -1021,7 +1065,13 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
                 Enter the complete details of the bank deposit for accurate tracking and reconciliation.
               </DialogDescription>
             </DialogHeader>
-            <DepositForm />
+            <DepositForm 
+              availableStations={availableStations}
+              onSubmit={handleSubmit}
+              onCancel={() => setShowDialog(false)}
+              loading={formSubmitting}
+              user={user}
+            />
           </DialogContent>
         </Dialog>
       </div>
@@ -1060,7 +1110,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
             Export CSV
           </Button>
 
-          {/* FIXED: Main Deposit Dialog */}
+          {/* Main Deposit Dialog */}
           <Dialog open={showDialog} onOpenChange={setShowDialog}>
             <DialogTrigger asChild>
               <Button 
@@ -1081,7 +1131,13 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
                   Enter bank deposit details for cash flow tracking and reconciliation
                 </DialogDescription>
               </DialogHeader>
-              <DepositForm />
+              <DepositForm 
+                availableStations={availableStations}
+                onSubmit={handleSubmit}
+                onCancel={() => setShowDialog(false)}
+                loading={formSubmitting}
+                user={user}
+              />
             </DialogContent>
           </Dialog>
         </div>
@@ -1277,7 +1333,6 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
         </div>
       )}
 
-  
       {/* Deposits List */}
       <Card className="p-6 bg-white rounded-2xl shadow-sm border border-gray-200">
         <CardHeader>
@@ -1536,7 +1591,15 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden">
-            <DepositForm isEdit={true} />
+            <DepositForm 
+              isEdit={true}
+              deposit={selectedDeposit}
+              availableStations={availableStations}
+              onSubmit={handleEdit}
+              onCancel={() => setShowEditDialog(false)}
+              loading={formSubmitting}
+              user={user}
+            />
           </div>
         </DialogContent>
       </Dialog>
@@ -1604,7 +1667,11 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
               Deposit Details
             </DialogTitle>
           </DialogHeader>
-          {selectedDeposit && (
+          {detailsLoading ? (
+            <div className="flex justify-center py-8">
+              <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+          ) : selectedDeposit ? (
             <div className="space-y-6">
               {/* Header */}
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
@@ -1650,7 +1717,7 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Station:</span>
-                        <span className="font-medium">{selectedDeposit.station_name}</span>
+                        <span className="font-medium">{selectedDeposit.station_name || 'Loading...'}</span>
                       </div>
                     </div>
                   </div>
@@ -1739,6 +1806,10 @@ export function BankDeposits({ stationId, stationName, compact = false, showAllS
                   </>
                 )}
               </div>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              Failed to load deposit details
             </div>
           )}
         </DialogContent>

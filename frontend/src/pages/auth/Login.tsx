@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Wifi, WifiOff, Fuel, Eye, EyeOff, LogIn, Play, Shield, Users, Building2, Smartphone } from 'lucide-react';
+import { Wifi, WifiOff, Fuel, Eye, EyeOff, LogIn, Shield, Users, Smartphone, KeyRound, Mail, Lock } from 'lucide-react';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -18,7 +18,9 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const { login, isLoading: authLoading } = useAuth();
+  
+  // Use the updated auth context
+  const { login, isLoading: authLoading, forgotPassword } = useAuth();
 
   useEffect(() => {
     const rememberedEmail = localStorage.getItem('pumpguard_remembered_email');
@@ -52,6 +54,7 @@ export default function Login() {
       }
 
       await login(email, password);
+      // Login successful - the AuthContext will handle redirect
     } catch (err: any) {
       const errorMessage = err.message || 'Login failed. Please check your credentials.';
       setError(errorMessage);
@@ -60,17 +63,36 @@ export default function Login() {
     }
   };
 
-  const demoAccounts = [
-    { role: 'Admin', email: 'admin@pumpguard.com', password: 'admin123' },
-    { role: 'Manager', email: 'manager@station.com', password: 'manager123' },
-    { role: 'Attendant', email: 'attendant@station.com', password: 'attendant123' },
-    { role: 'Dealer', email: 'dealer@pumpguard.com', password: 'dealer123' }
-  ];
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Please enter your email address to reset password.');
+      return;
+    }
+
+    setError('');
+    setLoading(true);
+
+    try {
+      const result = await forgotPassword(email);
+      
+      if (result.success) {
+        setError(''); // Clear any previous errors
+        // Show success message
+        alert(result.message || 'Password reset instructions sent to your email.');
+      } else {
+        setError(result.message || 'Failed to send reset instructions.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to process password reset request.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 mobile-height">
       <div className="container mx-auto px-4 py-8">
-        {/* Mobile Header - Only shows on small screens */}
+        {/* Mobile Header */}
         <div className="lg:hidden flex items-center justify-center gap-3 mb-8">
           <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl flex items-center justify-center shadow-lg">
             <Fuel className="w-6 h-6 text-white" />
@@ -84,7 +106,7 @@ export default function Login() {
         </div>
 
         <div className="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-12 items-center">
-          {/* Left Side - Branding and Features (Hidden on mobile) */}
+          {/* Left Side - Branding and Features */}
           <div className="hidden lg:block text-center lg:text-left space-y-8">
             <div className="flex items-center justify-center lg:justify-start gap-4">
               <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl flex items-center justify-center shadow-lg">
@@ -176,7 +198,8 @@ export default function Login() {
 
                 <form onSubmit={handleSubmit} className="space-y-4 lg:space-y-5">
                   <div className="space-y-2 lg:space-y-3">
-                    <Label htmlFor="email" className="text-sm font-medium text-gray-700">
+                    <Label htmlFor="email" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      <Mail className="w-4 h-4" />
                       Email Address
                     </Label>
                     <Input
@@ -186,14 +209,25 @@ export default function Login() {
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="your@email.com"
                       required
-                      className="h-11 lg:h-12 text-base border-gray-300 focus:border-blue-500"
+                      className="h-11 lg:h-12 text-base border-gray-300 focus:border-blue-500 pl-10"
                     />
                   </div>
 
                   <div className="space-y-2 lg:space-y-3">
-                    <Label htmlFor="password" className="text-sm font-medium text-gray-700">
-                      Password
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="password" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                        <Lock className="w-4 h-4" />
+                        Password
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={handleForgotPassword}
+                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                        disabled={loading || authLoading}
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
                     <div className="relative">
                       <Input
                         id="password"
@@ -208,6 +242,7 @@ export default function Login() {
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
                         className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                        disabled={loading || authLoading}
                       >
                         {showPassword ? <EyeOff className="w-4 h-4 lg:w-5 lg:h-5" /> : <Eye className="w-4 h-4 lg:w-5 lg:h-5" />}
                       </button>
@@ -221,6 +256,7 @@ export default function Login() {
                         checked={rememberMe}
                         onCheckedChange={(checked) => setRememberMe(checked === true)}
                         className="h-4 w-4"
+                        disabled={loading || authLoading}
                       />
                       <Label htmlFor="rememberMe" className="text-sm text-gray-700 cursor-pointer select-none">
                         Remember me
@@ -261,35 +297,15 @@ export default function Login() {
                   </Button>
                 </form>
 
-                {/* Demo Accounts Section */}
-                <div className="border-t border-gray-200 pt-4 lg:pt-6">
-                  <div className="text-center mb-3 lg:mb-4">
-                    <p className="text-sm font-medium text-gray-700 mb-2 lg:mb-3">Demo Accounts</p>
-                    <div className="space-y-1 lg:space-y-2 text-left">
-                      {demoAccounts.map((account, index) => (
-                        <div key={index} className="flex justify-between items-center text-xs bg-gray-50 p-2 rounded border border-gray-200">
-                          <span className="font-medium text-gray-600 truncate mr-2">{account.role}:</span>
-                          <span className="text-gray-500 font-mono text-xs truncate">{account.email}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-gray-500 mt-2 lg:mt-3">
-                      Run setup wizard to create demo accounts
-                    </p>
-                  </div>
-
-                  <div className="text-center">
-                    <Button 
-                      asChild 
-                      variant="outline" 
-                      className="w-full h-10 text-sm border-blue-200 text-blue-600 hover:bg-blue-50"
-                    >
-                      <Link to="/setup">
-                        <Play className="w-4 h-4 mr-2" />
-                        Run Setup Wizard
-                      </Link>
-                    </Button>
-                  </div>
+                {/* Password Reset Link */}
+                <div className="text-center pt-3 lg:pt-4">
+                  <Link 
+                    to="/auth/forgot-password" 
+                    className="inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 hover:underline transition-colors"
+                  >
+                    <KeyRound className="w-4 h-4" />
+                    Go to Password Reset Page
+                  </Link>
                 </div>
 
                 <div className="text-center pt-3 lg:pt-4 border-t border-gray-200">

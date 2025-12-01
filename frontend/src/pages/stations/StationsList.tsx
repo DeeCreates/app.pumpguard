@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { debounce } from "lodash";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -20,6 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "../../components/ui/dialog";
 import {
   Select,
@@ -45,6 +45,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
+import { Separator } from "../../components/ui/separator";
+import { ScrollArea } from "../../components/ui/scroll-area";
 import { toast } from "sonner";
 import { 
   Search, 
@@ -67,7 +69,11 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
-  Shield
+  Shield,
+  Percent,
+  Calendar,
+  DollarSign,
+  Sparkles
 } from "lucide-react";
 import { api } from "../../lib/api";
 
@@ -89,6 +95,7 @@ interface Station {
   compliance_status: 'compliant' | 'non_compliant' | 'under_review';
   total_violations: number;
   total_sales: number;
+  commission_rate: number;
   last_inspection_date?: string;
   gps_coordinates?: any;
   created_at: string;
@@ -104,6 +111,7 @@ interface StationFormData {
   omc_id: string;
   dealer_id: string;
   manager_id: string;
+  commission_rate: number;
 }
 
 interface UserProfile {
@@ -113,6 +121,15 @@ interface UserProfile {
   dealer_id?: string;
   omc_name?: string;
 }
+
+// Conversion functions for commission rate
+const percentageToDecimal = (percentage: number): number => {
+  return percentage / 100;
+};
+
+const decimalToPercentage = (decimal: number): number => {
+  return decimal * 100;
+};
 
 export function StationsList() {
   const [stations, setStations] = useState<Station[]>([]);
@@ -131,11 +148,14 @@ export function StationsList() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showViewDialog, setShowViewDialog] = useState(false);
+  const [showPerformanceDialog, setShowPerformanceDialog] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [selectedStations, setSelectedStations] = useState<string[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [sortField, setSortField] = useState<keyof Station>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [autoGenerateCode, setAutoGenerateCode] = useState(true);
 
   const [newStation, setNewStation] = useState<StationFormData>({
     name: "",
@@ -143,9 +163,10 @@ export function StationsList() {
     address: "",
     city: "",
     region: "",
-    omc_id: null,
-    dealer_id: null,
-    manager_id: null
+    omc_id: "no-omc",
+    dealer_id: "",
+    manager_id: "",
+    commission_rate: 30.00
   });
 
   const [editStation, setEditStation] = useState<StationFormData & { status: Station['status'] }>({
@@ -155,15 +176,36 @@ export function StationsList() {
     city: "",
     region: "",
     status: 'active',
-    omc_id: "",
+    omc_id: "no-omc",
     dealer_id: "",
-    manager_id: ""
+    manager_id: "",
+    commission_rate: 0
   });
 
   const ITEMS_PER_PAGE = 10;
 
+  // Updated regions list for Ghana (16 regions)
+  const regions = useMemo(() => [
+    "Ahafo",
+    "Ashanti", 
+    "Bono",
+    "Bono East",
+    "Central",
+    "Eastern",
+    "Greater Accra",
+    "North East",
+    "Northern",
+    "Oti",
+    "Savannah",
+    "Upper East", 
+    "Upper West",
+    "Volta",
+    "Western",
+    "Western North"
+  ], []);
+
   // Enhanced code generator that meets all constraint requirements
-  const generateStationCode = (stationName: string): string => {
+  const generateStationCode = useCallback((stationName: string): string => {
     // Extract meaningful part from name
     const baseCode = stationName
       .toUpperCase()
@@ -184,21 +226,31 @@ export function StationsList() {
     }
     
     return finalCode;
-  };
+  }, []);
+
+  // Auto-generate code when name changes
+  useEffect(() => {
+    if (autoGenerateCode && newStation.name && showCreateDialog) {
+      const generatedCode = generateStationCode(newStation.name);
+      setNewStation(prev => ({ ...prev, code: generatedCode }));
+    }
+  }, [newStation.name, autoGenerateCode, generateStationCode, showCreateDialog]);
 
   // Reset form function
-  const resetNewStationForm = () => {
+  const resetNewStationForm = useCallback(() => {
     setNewStation({
       name: "",
       code: "",
       address: "",
       city: "",
       region: "",
-      omc_id: userProfile?.role === 'omc' ? userProfile.omc_id || "" : "",
+      omc_id: userProfile?.role === 'omc' ? userProfile.omc_id || "no-omc" : "no-omc",
       dealer_id: "",
-      manager_id: ""
+      manager_id: "",
+      commission_rate: 30.00
     });
-  };
+    setAutoGenerateCode(true);
+  }, [userProfile]);
 
   // Debounced search
   const debouncedLoadStations = useCallback(
@@ -216,7 +268,7 @@ export function StationsList() {
 
   useEffect(() => {
     debouncedLoadStations();
-  }, [searchTerm]);
+  }, [searchTerm, debouncedLoadStations]);
 
   const loadUserProfile = async () => {
     try {
@@ -299,11 +351,18 @@ export function StationsList() {
       // Generate a guaranteed valid station code
       const stationCode = generateStationCode(newStation.name);
       
-      let stationData = { 
+      // Prepare data for API - convert special values to null
+      let stationData: any = { 
         ...newStation,
-        code: stationCode // OVERRIDE with properly generated code
+        code: stationCode, // OVERRIDE with properly generated code
+        commission_rate: percentageToDecimal(newStation.commission_rate) // Convert to decimal for database
       };
       
+      // Convert special values to proper database values
+      if (stationData.omc_id === "no-omc") stationData.omc_id = null;
+      if (stationData.dealer_id === "") stationData.dealer_id = null;
+      if (stationData.manager_id === "") stationData.manager_id = null;
+
       // Auto-detect OMC context for OMC users
       if (userProfile?.role === 'omc' && userProfile.omc_id) {
         stationData.omc_id = userProfile.omc_id;
@@ -334,7 +393,18 @@ export function StationsList() {
     if (!selectedStation) return;
 
     try {
-      const response = await api.updateStation(selectedStation.id, editStation);
+      // Prepare data for API - convert special values to null
+      let stationData: any = {
+        ...editStation,
+        commission_rate: percentageToDecimal(editStation.commission_rate)
+      };
+
+      // Convert special values to proper database values
+      if (stationData.omc_id === "no-omc") stationData.omc_id = null;
+      if (stationData.dealer_id === "") stationData.dealer_id = null;
+      if (stationData.manager_id === "") stationData.manager_id = null;
+
+      const response = await api.updateStation(selectedStation.id, stationData);
       
       if (response.success) {
         toast.success("Station updated successfully!");
@@ -418,6 +488,7 @@ export function StationsList() {
           OMC: station.omc_name || 'N/A',
           Location: station.location,
           Region: station.region,
+          'Commission Rate': `${decimalToPercentage(station.commission_rate || 0)}%`,
           Status: station.status,
           'Total Sales': station.total_sales,
           'Total Violations': station.total_violations,
@@ -446,6 +517,16 @@ export function StationsList() {
     }
   };
 
+  const openViewDialog = (station: Station) => {
+    setSelectedStation(station);
+    setShowViewDialog(true);
+  };
+
+  const openPerformanceDialog = (station: Station) => {
+    setSelectedStation(station);
+    setShowPerformanceDialog(true);
+  };
+
   const openEditDialog = (station: Station) => {
     setSelectedStation(station);
     setEditStation({
@@ -455,9 +536,10 @@ export function StationsList() {
       city: station.city || "",
       region: station.region,
       status: station.status,
-      omc_id: station.omc_id || "",
+      omc_id: station.omc_id || "no-omc",
       dealer_id: station.dealer_id || "",
-      manager_id: station.manager_id || ""
+      manager_id: station.manager_id || "",
+      commission_rate: decimalToPercentage(station.commission_rate || 0)
     });
     setShowEditDialog(true);
   };
@@ -530,14 +612,12 @@ export function StationsList() {
     return sortDirection === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />;
   };
 
-  const regions = [
-    "Greater Accra", "Ashanti", "Western", "Central", "Eastern",
-    "Volta", "Northern", "Upper East", "Upper West", "Brong Ahafo"
-  ];
-
-  const filteredOmcs = userProfile?.role === 'omc' 
-    ? omcs.filter(omc => omc.id === userProfile.omc_id)
-    : omcs;
+  const filteredOmcs = useMemo(() => 
+    userProfile?.role === 'omc' 
+      ? omcs.filter(omc => omc.id === userProfile.omc_id)
+      : omcs,
+    [omcs, userProfile]
+  );
 
   return (
     <div className="min-h-screen bg-gray-50/50 p-6">
@@ -620,107 +700,162 @@ export function StationsList() {
                 <DialogContent className="max-w-2xl">
                   <DialogHeader>
                     <DialogTitle>Create New Station</DialogTitle>
+                    <DialogDescription>
+                      Add a new fuel station to the system. Station code will be auto-generated from the name.
+                    </DialogDescription>
                   </DialogHeader>
-                  <form onSubmit={handleCreateStation} className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="md:col-span-2">
-                        <label className="text-sm font-medium text-gray-700">Station Name *</label>
-                        <Input
-                          value={newStation.name}
-                          onChange={(e) => setNewStation({ ...newStation, name: e.target.value })}
-                          placeholder="Enter station name"
-                          required
-                          className="mt-1"
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="text-sm font-medium text-gray-700">Station Code *</label>
-                        <Input
-                          value={newStation.code}
-                          onChange={(e) => setNewStation({ ...newStation, code: e.target.value })}
-                          placeholder="Unique station code"
-                          required
-                          className="mt-1"
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="text-sm font-medium text-gray-700">Region *</label>
-                        <Select 
-                          value={newStation.region} 
-                          onValueChange={(value) => setNewStation({ ...newStation, region: value })}
-                        >
-                          <SelectTrigger className="mt-1">
-                            <SelectValue placeholder="Select region" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {regions.map(region => (
-                              <SelectItem key={region} value={region}>
-                                {region}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-medium text-gray-700">City</label>
-                        <Input
-                          value={newStation.city}
-                          onChange={(e) => setNewStation({ ...newStation, city: e.target.value })}
-                          placeholder="Enter city"
-                          className="mt-1"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2">
-                        <label className="text-sm font-medium text-gray-700">Address *</label>
-                        <Input
-                          value={newStation.address}
-                          onChange={(e) => setNewStation({ ...newStation, address: e.target.value })}
-                          placeholder="Full station address"
-                          required
-                          className="mt-1"
-                        />
-                      </div>
-
-                      {userProfile?.role === 'admin' && (
+                  
+                  <Separator />
+                  
+                  <ScrollArea className="max-h-[80vh]">
+                    <form onSubmit={handleCreateStation} className="space-y-4 p-1">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="md:col-span-2">
-                          <label className="text-sm font-medium text-gray-700">OMC</label>
+                          <label className="text-sm font-medium text-gray-700">Station Name *</label>
+                          <Input
+                            value={newStation.name}
+                            onChange={(e) => setNewStation({ ...newStation, name: e.target.value })}
+                            placeholder="Enter station name"
+                            required
+                            className="mt-1"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="text-sm font-medium text-gray-700">Station Code *</label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={newStation.code}
+                              onChange={(e) => {
+                                setNewStation({ ...newStation, code: e.target.value });
+                                setAutoGenerateCode(false);
+                              }}
+                              placeholder="Unique station code"
+                              required
+                              className="mt-1 flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const generatedCode = generateStationCode(newStation.name);
+                                setNewStation(prev => ({ ...prev, code: generatedCode }));
+                                setAutoGenerateCode(true);
+                              }}
+                              className="mt-1 whitespace-nowrap"
+                              disabled={!newStation.name}
+                            >
+                              <Sparkles className="w-4 h-4" />
+                            </Button>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {autoGenerateCode ? "Code will auto-generate from name" : "Custom code entered"}
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="text-sm font-medium text-gray-700">Commission Rate *</label>
+                          <div className="relative">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max="100"
+                              value={newStation.commission_rate}
+                              onChange={(e) => setNewStation({ ...newStation, commission_rate: parseFloat(e.target.value) || 0 })}
+                              placeholder="30.00"
+                              required
+                              className="mt-1 pl-10"
+                            />
+                            <Percent className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">Percentage rate for commission calculations</p>
+                        </div>
+                        
+                        <div>
+                          <label className="text-sm font-medium text-gray-700">Region *</label>
                           <Select 
-                            value={newStation.omc_id} 
-                            onValueChange={(value) => setNewStation({ ...newStation, omc_id: value })}
+                            value={newStation.region} 
+                            onValueChange={(value) => setNewStation({ ...newStation, region: value })}
                           >
                             <SelectTrigger className="mt-1">
-                              <SelectValue placeholder="Select OMC" />
+                              <SelectValue placeholder="Select region" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="">No OMC</SelectItem>
-                              {filteredOmcs.map((omc) => (
-                                <SelectItem key={omc.id} value={omc.id}>
-                                  {omc.name}
+                              {regions.map(region => (
+                                <SelectItem key={region} value={region}>
+                                  {region}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
                         </div>
-                      )}
-                    </div>
-                    
-                    <DialogFooter>
-                      <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
-                        Create Station
-                      </Button>
-                      <Button 
-                        type="button" 
-                        variant="outline" 
-                        onClick={() => setShowCreateDialog(false)}
-                      >
-                        Cancel
-                      </Button>
-                    </DialogFooter>
-                  </form>
+
+                        <div>
+                          <label className="text-sm font-medium text-gray-700">City</label>
+                          <Input
+                            value={newStation.city}
+                            onChange={(e) => setNewStation({ ...newStation, city: e.target.value })}
+                            placeholder="Enter city"
+                            className="mt-1"
+                          />
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="text-sm font-medium text-gray-700">Address *</label>
+                          <Input
+                            value={newStation.address}
+                            onChange={(e) => setNewStation({ ...newStation, address: e.target.value })}
+                            placeholder="Full station address"
+                            required
+                            className="mt-1"
+                          />
+                        </div>
+
+                        {userProfile?.role === 'admin' && (
+                          <div className="md:col-span-2">
+                            <Separator className="my-2" />
+                            <label className="text-sm font-medium text-gray-700">OMC</label>
+                            <Select 
+                              value={newStation.omc_id} 
+                              onValueChange={(value) => setNewStation({ ...newStation, omc_id: value })}
+                            >
+                              <SelectTrigger className="mt-1">
+                                <SelectValue placeholder="Select OMC" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="no-omc">No OMC</SelectItem>
+                                {filteredOmcs.map((omc) => (
+                                  <SelectItem key={omc.id} value={omc.id}>
+                                    {omc.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </div>
+                      
+                      <Separator />
+                      
+                      <DialogFooter>
+                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+                          Create Station
+                        </Button>
+                        <Button 
+                          type="button" 
+                          variant="outline" 
+                          onClick={() => {
+                            setShowCreateDialog(false);
+                            resetNewStationForm();
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </ScrollArea>
                 </DialogContent>
               </Dialog>
             )}
@@ -829,6 +964,8 @@ export function StationsList() {
             </CardTitle>
           </CardHeader>
           
+          <Separator />
+          
           <CardContent>
             {loading ? (
               <div className="flex justify-center items-center py-12">
@@ -885,6 +1022,7 @@ export function StationsList() {
                             {getSortIcon('region')}
                           </div>
                         </TableHead>
+                        <TableHead>Commission</TableHead>
                         <TableHead 
                           className="cursor-pointer hover:bg-gray-50 transition-colors"
                           onClick={() => handleSort('status')}
@@ -957,6 +1095,14 @@ export function StationsList() {
                               </div>
                             </TableCell>
                             <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Percent className="w-4 h-4 text-green-600" />
+                                <span className="font-medium text-gray-900">
+                                  {decimalToPercentage(station.commission_rate || 0)}%
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
                               <Badge 
                                 variant={getStatusBadgeVariant(station.status)}
                                 className="capitalize"
@@ -999,11 +1145,11 @@ export function StationsList() {
                                     </Button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
-                                    <DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => openViewDialog(station)}>
                                       <Eye className="w-4 h-4 mr-2" />
                                       View Details
                                     </DropdownMenuItem>
-                                    <DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => openPerformanceDialog(station)}>
                                       <BarChart3 className="w-4 h-4 mr-2" />
                                       Performance
                                     </DropdownMenuItem>
@@ -1072,122 +1218,280 @@ export function StationsList() {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Edit Station</DialogTitle>
+              <DialogDescription>
+                Update station information. Make changes as needed.
+              </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleEditStation} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="text-sm font-medium text-gray-700">Station Name *</label>
-                  <Input
-                    value={editStation.name}
-                    onChange={(e) => setEditStation({ ...editStation, name: e.target.value })}
-                    required
-                    className="mt-1"
-                  />
-                </div>
-                
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Station Code *</label>
-                  <Input
-                    value={editStation.code}
-                    onChange={(e) => setEditStation({ ...editStation, code: e.target.value })}
-                    required
-                    className="mt-1"
-                  />
-                </div>
-                
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Status</label>
-                  <Select 
-                    value={editStation.status} 
-                    onValueChange={(value: Station['status']) => 
-                      setEditStation({ ...editStation, status: value })
-                    }
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="inactive">Inactive</SelectItem>
-                      <SelectItem value="maintenance">Maintenance</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700">City</label>
-                  <Input
-                    value={editStation.city}
-                    onChange={(e) => setEditStation({ ...editStation, city: e.target.value })}
-                    className="mt-1"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Region *</label>
-                  <Select 
-                    value={editStation.region} 
-                    onValueChange={(value) => setEditStation({ ...editStation, region: value })}
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="Select region" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {regions.map(region => (
-                        <SelectItem key={region} value={region}>
-                          {region}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="text-sm font-medium text-gray-700">Address *</label>
-                  <Input
-                    value={editStation.address}
-                    onChange={(e) => setEditStation({ ...editStation, address: e.target.value })}
-                    required
-                    className="mt-1"
-                  />
-                </div>
-
-                {userProfile?.role === 'admin' && (
+            
+            <Separator />
+            
+            <ScrollArea className="max-h-[80vh]">
+              <form onSubmit={handleEditStation} className="space-y-4 p-1">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
-                    <label className="text-sm font-medium text-gray-700">OMC</label>
+                    <label className="text-sm font-medium text-gray-700">Station Name *</label>
+                    <Input
+                      value={editStation.name}
+                      onChange={(e) => setEditStation({ ...editStation, name: e.target.value })}
+                      required
+                      className="mt-1"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Station Code *</label>
+                    <Input
+                      value={editStation.code}
+                      onChange={(e) => setEditStation({ ...editStation, code: e.target.value })}
+                      required
+                      className="mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Commission Rate *</label>
+                    <div className="relative">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editStation.commission_rate}
+                        onChange={(e) => setEditStation({ ...editStation, commission_rate: parseFloat(e.target.value) || 0 })}
+                        required
+                        className="mt-1 pl-10"
+                      />
+                      <Percent className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Status</label>
                     <Select 
-                      value={editStation.omc_id} 
-                      onValueChange={(value) => setEditStation({ ...editStation, omc_id: value })}
+                      value={editStation.status} 
+                      onValueChange={(value: Station['status']) => 
+                        setEditStation({ ...editStation, status: value })
+                      }
                     >
                       <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Select OMC" />
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No OMC</SelectItem>
-                        {filteredOmcs.map((omc) => (
-                          <SelectItem key={omc.id} value={omc.id}>
-                            {omc.name}
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="inactive">Inactive</SelectItem>
+                        <SelectItem value="maintenance">Maintenance</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">City</label>
+                    <Input
+                      value={editStation.city}
+                      onChange={(e) => setEditStation({ ...editStation, city: e.target.value })}
+                      className="mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Region *</label>
+                    <Select 
+                      value={editStation.region} 
+                      onValueChange={(value) => setEditStation({ ...editStation, region: value })}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select region" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {regions.map(region => (
+                          <SelectItem key={region} value={region}>
+                            {region}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                )}
-              </div>
-              
-              <DialogFooter>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
-                  Update Station
-                </Button>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  onClick={() => setShowEditDialog(false)}
-                >
-                  Cancel
-                </Button>
-              </DialogFooter>
-            </form>
+
+                  <div className="md:col-span-2">
+                    <label className="text-sm font-medium text-gray-700">Address *</label>
+                    <Input
+                      value={editStation.address}
+                      onChange={(e) => setEditStation({ ...editStation, address: e.target.value })}
+                      required
+                      className="mt-1"
+                    />
+                  </div>
+
+                  {userProfile?.role === 'admin' && (
+                    <div className="md:col-span-2">
+                      <Separator className="my-2" />
+                      <label className="text-sm font-medium text-gray-700">OMC</label>
+                      <Select 
+                        value={editStation.omc_id} 
+                        onValueChange={(value) => setEditStation({ ...editStation, omc_id: value })}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Select OMC" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="no-omc">No OMC</SelectItem>
+                          {filteredOmcs.map((omc) => (
+                            <SelectItem key={omc.id} value={omc.id}>
+                              {omc.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+                
+                <Separator />
+                
+                <DialogFooter>
+                  <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+                    Update Station
+                  </Button>
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={() => setShowEditDialog(false)}
+                  >
+                    Cancel
+                  </Button>
+                </DialogFooter>
+              </form>
+            </ScrollArea>
+          </DialogContent>
+        </Dialog>
+
+        {/* View Station Dialog */}
+        <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Station Details</DialogTitle>
+              <DialogDescription>
+                Complete information for {selectedStation?.name}
+              </DialogDescription>
+            </DialogHeader>
+            
+            <Separator />
+            
+            <ScrollArea className="max-h-[80vh]">
+              {selectedStation && (
+                <div className="space-y-4 p-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Station Name</label>
+                      <p className="text-gray-900 font-medium">{selectedStation.name}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Station Code</label>
+                      <p className="text-gray-900 font-medium">{selectedStation.code}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Commission Rate</label>
+                      <p className="text-gray-900 font-medium">{decimalToPercentage(selectedStation.commission_rate || 0)}%</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Status</label>
+                      <Badge 
+                        variant={getStatusBadgeVariant(selectedStation.status)}
+                        className="capitalize"
+                      >
+                        {selectedStation.status}
+                      </Badge>
+                    </div>
+                    <div className="md:col-span-2">
+                      <Separator className="my-2" />
+                      <label className="text-sm font-medium text-gray-500">Address</label>
+                      <p className="text-gray-900">{selectedStation.address}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">City</label>
+                      <p className="text-gray-900">{selectedStation.city || "N/A"}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Region</label>
+                      <p className="text-gray-900">{selectedStation.region}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Location</label>
+                      <p className="text-gray-900">{selectedStation.location}</p>
+                    </div>
+                    {selectedStation.omc_name && (
+                      <div>
+                        <Separator className="my-2" />
+                        <label className="text-sm font-medium text-gray-500">OMC</label>
+                        <p className="text-gray-900">{selectedStation.omc_name}</p>
+                      </div>
+                    )}
+                    {selectedStation.manager_name && (
+                      <div>
+                        <label className="text-sm font-medium text-gray-500">Manager</label>
+                        <p className="text-gray-900">{selectedStation.manager_name}</p>
+                      </div>
+                    )}
+                    <div>
+                      <Separator className="my-2" />
+                      <label className="text-sm font-medium text-gray-500">Total Sales</label>
+                      <p className="text-gray-900 font-medium">₵{selectedStation.total_sales?.toLocaleString() || '0'}</p>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Open Violations</label>
+                      <p className="text-gray-900">{selectedStation.total_violations}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </ScrollArea>
+          </DialogContent>
+        </Dialog>
+
+        {/* Performance Dialog */}
+        <Dialog open={showPerformanceDialog} onOpenChange={setShowPerformanceDialog}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Station Performance</DialogTitle>
+              <DialogDescription>
+                Performance metrics for {selectedStation?.name}
+              </DialogDescription>
+            </DialogHeader>
+            
+            <Separator />
+            
+            <ScrollArea className="max-h-[80vh]">
+              {selectedStation && (
+                <div className="space-y-4 p-1">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Card className="p-4">
+                      <p className="text-sm text-gray-500">Total Sales</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        ₵{selectedStation.total_sales?.toLocaleString() || '0'}
+                      </p>
+                    </Card>
+                    <Card className="p-4">
+                      <p className="text-sm text-gray-500">Commission Rate</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {decimalToPercentage(selectedStation.commission_rate || 0)}%
+                      </p>
+                    </Card>
+                    <Card className="p-4">
+                      <p className="text-sm text-gray-500">Monthly Commission</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        ₵{Math.round((selectedStation.total_sales || 0) * (selectedStation.commission_rate || 0) / 12).toLocaleString()}
+                      </p>
+                    </Card>
+                    <Card className="p-4">
+                      <p className="text-sm text-gray-500">Open Violations</p>
+                      <p className="text-2xl font-bold text-gray-900">
+                        {selectedStation.total_violations}
+                      </p>
+                    </Card>
+                  </div>
+                </div>
+              )}
+            </ScrollArea>
           </DialogContent>
         </Dialog>
 

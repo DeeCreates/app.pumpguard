@@ -1,5 +1,24 @@
 import { authAPI } from './auth-api';
 import { supabase } from './supabase';
+import { createClient } from '@supabase/supabase-js'
+
+// Environment variables
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabaseServiceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+
+// Regular client for normal operations
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+// Admin client for privileged operations
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false
+  }
+})
+
 
 // ===== ERROR HANDLING TYPES =====
 
@@ -3864,8 +3883,7 @@ async setStationPrice(priceData: StationPriceCreateData): Promise<APIResponse> {
         effective_date: priceData.effective_date,
         end_date: priceData.end_date || null,
         omc_user_id: user.id,
-        status: (profile.role === 'admin' || profile.role === 'npa') ? 'active' : 'pending',
-        is_auto_adjusted: priceData.is_auto_adjusted,
+        status: (profile.role === 'admin' || profile.role === 'npa' || profile.role === 'omc' || profile.role === 'station') ? 'active' : 'pending',        is_auto_adjusted: priceData.is_auto_adjusted,
         price_cap_id: currentPriceCap?.id,
         price_cap_amount: currentPriceCap?.cap_price,
         margin: margin,
@@ -4060,10 +4078,31 @@ async setOMCRecommendedPrice(priceData: OMCPriceCreateData): Promise<APIResponse
 }
 
 /**
- * Get all OMC recommended prices (from station_prices where station_id is null)
+ * Get all OMC recommended prices with role-based filtering
  */
 async getAllOMCPrices(filters?: PriceFilters): Promise<APIResponse> {
   try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, omc_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return {
+        success: false,
+        error: 'User profile not found'
+      };
+    }
+
     let query = supabase
       .from('station_prices')
       .select(`
@@ -4074,9 +4113,48 @@ async getAllOMCPrices(filters?: PriceFilters): Promise<APIResponse> {
       .is('station_id', null) // OMC prices have null station_id
       .order('effective_date', { ascending: false });
 
-    // Apply filters
-    if (filters?.omc_id) {
-      query = query.eq('profiles.omc_id', filters.omc_id);
+    // Apply role-based filtering for OMC prices
+    if (profile.role === 'omc' && profile.omc_id) {
+      // OMC users can only see prices from their OMC
+      const { data: omcUsers } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('omc_id', profile.omc_id);
+
+      if (omcUsers && omcUsers.length > 0) {
+        const userIds = omcUsers.map(u => u.id);
+        query = query.in('omc_user_id', userIds);
+      } else {
+        return {
+          success: true,
+          data: []
+        };
+      }
+    }
+    // Station users cannot see OMC prices at all
+    else if (profile.role === 'station') {
+      return {
+        success: true,
+        data: []
+      };
+    }
+
+    // Apply additional filters (only for admin/npa)
+    if (filters?.omc_id && (profile.role === 'admin' || profile.role === 'npa')) {
+      const { data: omcUsers } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('omc_id', filters.omc_id);
+
+      if (omcUsers && omcUsers.length > 0) {
+        const userIds = omcUsers.map(u => u.id);
+        query = query.in('omc_user_id', userIds);
+      } else {
+        return {
+          success: true,
+          data: []
+        };
+      }
     }
     if (filters?.product_id) {
       query = query.eq('product_id', filters.product_id);
@@ -4203,10 +4281,31 @@ async getOMCRecommendedPrices(omcId: string): Promise<APIResponse> {
 }
 
 /**
- * Get all station prices (excluding OMC prices)
+ * Get all station prices with proper role-based filtering
  */
 async getAllStationPrices(filters?: PriceFilters): Promise<APIResponse> {
   try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, omc_id, station_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return {
+        success: false,
+        error: 'User profile not found'
+      };
+    }
+
     let query = supabase
       .from('station_prices')
       .select(`
@@ -4217,7 +4316,30 @@ async getAllStationPrices(filters?: PriceFilters): Promise<APIResponse> {
       .not('station_id', 'is', null) // Exclude OMC prices
       .order('effective_date', { ascending: false });
 
-    // Apply filters
+    // Apply role-based filtering
+    if (profile.role === 'station' && profile.station_id) {
+      // Station managers can only see their own station's prices
+      query = query.eq('station_id', profile.station_id);
+    } else if (profile.role === 'omc' && profile.omc_id) {
+      // OMC users can only see prices from their OMC stations
+      const { data: omcStations } = await supabase
+        .from('stations')
+        .select('id')
+        .eq('omc_id', profile.omc_id);
+
+      if (omcStations && omcStations.length > 0) {
+        query = query.in('station_id', omcStations.map(s => s.id));
+      } else {
+        // No stations for this OMC
+        return {
+          success: true,
+          data: []
+        };
+      }
+    }
+    // Admin and NPA can see all stations (no additional filtering)
+
+    // Apply additional filters from parameters
     if (filters?.station_id) {
       query = query.eq('station_id', filters.station_id);
     }
@@ -4233,8 +4355,8 @@ async getAllStationPrices(filters?: PriceFilters): Promise<APIResponse> {
     if (filters?.end_date) {
       query = query.lte('effective_date', filters.end_date);
     }
-    if (filters?.omc_id) {
-      // Filter by OMC through station relationship
+    if (filters?.omc_id && (profile.role === 'admin' || profile.role === 'npa')) {
+      // Only admin/npa can filter by omc_id
       const { data: stationIds } = await supabase
         .from('stations')
         .select('id')
@@ -4243,7 +4365,6 @@ async getAllStationPrices(filters?: PriceFilters): Promise<APIResponse> {
       if (stationIds && stationIds.length > 0) {
         query = query.in('station_id', stationIds.map(s => s.id));
       } else {
-        // No stations for this OMC, return empty array
         return {
           success: true,
           data: []
@@ -4293,6 +4414,331 @@ async getAllStationPrices(filters?: PriceFilters): Promise<APIResponse> {
     return {
       success: false,
       error: 'Failed to fetch station prices: ' + extractErrorMessage(error)
+    };
+  }
+}
+
+/**
+ * Delete price cap
+ */
+async deletePriceCap(priceCapId: string): Promise<APIResponse> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    // Check if user has permission to delete price caps
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || (profile.role !== 'admin' && profile.role !== 'npa')) {
+      return {
+        success: false,
+        error: 'Insufficient permissions to delete price caps'
+      };
+    }
+
+    const { error } = await supabase
+      .from('price_caps')
+      .delete()
+      .eq('id', priceCapId);
+
+    if (error) {
+      return {
+        success: false,
+        error: extractErrorMessage(error)
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Price cap deleted successfully'
+    };
+
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: 'Failed to delete price cap: ' + extractErrorMessage(error)
+    };
+  }
+}
+
+/**
+ * Delete station price
+ */
+async deleteStationPrice(priceId: string): Promise<APIResponse> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, station_id, omc_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return {
+        success: false,
+        error: 'User profile not found'
+      };
+    }
+
+    // Get the price to check permissions
+    const { data: price } = await supabase
+      .from('station_prices')
+      .select('station_id, stations(omc_id), status')
+      .eq('id', priceId)
+      .single();
+
+    if (!price) {
+      return {
+        success: false,
+        error: 'Price not found'
+      };
+    }
+
+    // Check permissions
+    if (profile.role === 'station' && price.station_id !== profile.station_id) {
+      return {
+        success: false,
+        error: 'Can only delete prices for your own station'
+      };
+    }
+
+    if (profile.role === 'omc' && price.stations?.omc_id !== profile.omc_id) {
+      return {
+        success: false,
+        error: 'Can only delete prices for your OMC stations'
+      };
+    }
+
+    // Only allow deletion of pending prices for non-admin users
+    if ((profile.role === 'station' || profile.role === 'omc') && price.status !== 'pending') {
+      return {
+        success: false,
+        error: 'Can only delete pending prices. Contact admin for active price changes.'
+      };
+    }
+
+    const { error } = await supabase
+      .from('station_prices')
+      .delete()
+      .eq('id', priceId);
+
+    if (error) {
+      return {
+        success: false,
+        error: extractErrorMessage(error)
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Station price deleted successfully'
+    };
+
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: 'Failed to delete station price: ' + extractErrorMessage(error)
+    };
+  }
+}
+
+/**
+ * Delete OMC price
+ */
+async deleteOMCPrice(priceId: string): Promise<APIResponse> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, omc_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return {
+        success: false,
+        error: 'User profile not found'
+      };
+    }
+
+    // Get the OMC price to check permissions
+    const { data: price } = await supabase
+      .from('station_prices')
+      .select('omc_user_id, profiles(omc_id)')
+      .eq('id', priceId)
+      .single();
+
+    if (!price) {
+      return {
+        success: false,
+        error: 'OMC price not found'
+      };
+    }
+
+    // Check permissions - users can only delete their own OMC prices
+    if (profile.role === 'omc' && price.omc_user_id !== user.id) {
+      return {
+        success: false,
+        error: 'Can only delete your own OMC prices'
+      };
+    }
+
+    const { error } = await supabase
+      .from('station_prices')
+      .delete()
+      .eq('id', priceId)
+      .is('station_id', null); // Ensure it's an OMC price
+
+    if (error) {
+      return {
+        success: false,
+        error: extractErrorMessage(error)
+      };
+    }
+
+    return {
+      success: true,
+      message: 'OMC price deleted successfully'
+    };
+
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: 'Failed to delete OMC price: ' + extractErrorMessage(error)
+    };
+  }
+}
+
+
+/**
+ * Approve pending station price
+ */
+async approveStationPrice(priceId: string): Promise<APIResponse> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || (profile.role !== 'admin' && profile.role !== 'npa')) {
+      return {
+        success: false,
+        error: 'Insufficient permissions to approve prices'
+      };
+    }
+
+    const { error } = await supabase
+      .from('station_prices')
+      .update({ 
+        status: 'approved',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', priceId)
+      .eq('status', 'pending');
+
+    if (error) {
+      return {
+        success: false,
+        error: extractErrorMessage(error)
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Station price approved successfully'
+    };
+
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: 'Failed to approve station price: ' + extractErrorMessage(error)
+    };
+  }
+}
+
+/**
+ * Reject pending station price
+ */
+async rejectStationPrice(priceId: string): Promise<APIResponse> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || (profile.role !== 'admin' && profile.role !== 'npa')) {
+      return {
+        success: false,
+        error: 'Insufficient permissions to reject prices'
+      };
+    }
+
+    const { error } = await supabase
+      .from('station_prices')
+      .update({ 
+        status: 'rejected',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', priceId)
+      .eq('status', 'pending');
+
+    if (error) {
+      return {
+        success: false,
+        error: extractErrorMessage(error)
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Station price rejected successfully'
+    };
+
+  } catch (error: unknown) {
+    return {
+      success: false,
+      error: 'Failed to reject station price: ' + extractErrorMessage(error)
     };
   }
 }
@@ -6709,7 +7155,7 @@ async deleteStation(stationId: string): Promise<APIResponse> {
 }
 
 /**
- * Advanced station search with multiple parameters - POLISHED
+ * Advanced station search with multiple parameters - UPDATED FOR COMMISSIONS
  */
 async searchStations(
   filters: StationFilters = {},
@@ -6805,6 +7251,11 @@ async searchStations(
     // Apply search filters
     if (filters.omc_id && filters.omc_id !== 'all') {
       query = query.eq('omc_id', filters.omc_id);
+    }
+
+    // ✅ ADDED: Dealer filter support for Commission component
+    if (filters.dealer_id && filters.dealer_id !== 'all') {
+      query = query.eq('dealer_id', filters.dealer_id);
     }
 
     if (filters.status && filters.status.length > 0 && !filters.status.includes('all')) {
@@ -6903,6 +7354,8 @@ async searchStations(
             compliance_status: complianceStatus,
             total_violations: openViolations,
             total_sales: totalSales,
+            // ✅ CRITICAL: Include commission_rate for Commission component calculations
+            commission_rate: station.commission_rate || 0.05,
             created_at: station.created_at,
             updated_at: station.updated_at
           };
@@ -6927,6 +7380,11 @@ async searchStations(
     });
 
     console.log(`✅ [${requestId}] Station search completed: ${validStations.length} results`);
+    console.log(`💰 Commission rates included:`, validStations.map(s => ({
+      name: s.name,
+      commission_rate: s.commission_rate
+    })));
+    
     return {
       success: true,
       data: {
@@ -12384,63 +12842,84 @@ async getSalesSummary(filters: SalesFilters = {}): Promise<APIResponse> {
     }
   }
 
-  /**
-   * Get price caps
-   */
-async getPriceCaps(): Promise<APIResponse> {
+/**
+ * Get price caps with role-based filtering
+ */
+async getPriceCaps(filters?: PriceFilters): Promise<APIResponse> {
   try {
-    const { data, error } = await supabase
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role, omc_id')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile) {
+      return {
+        success: false,
+        error: 'User profile not found'
+      };
+    }
+
+    let query = supabase
       .from('price_caps')
       .select(`
         *,
-        products!inner (name, unit, code),
+        products (name, unit),
         omcs (name)
-      `)  // Use !inner to ensure product data is loaded
+      `)
       .order('effective_from', { ascending: false });
 
+    // Apply role-based filtering
+    if (profile.role === 'omc' && profile.omc_id) {
+      // OMC users can see national caps and caps for their OMC
+      query = query.or(`scope.eq.national,omc_id.eq.${profile.omc_id}`);
+    } else if (profile.role === 'station') {
+      // Station users can only see national caps
+      query = query.eq('scope', 'national');
+    }
+    // Admin and NPA can see all caps
+
+    // Apply additional filters
+    if (filters?.product_id) {
+      query = query.eq('product_id', filters.product_id);
+    }
+    if (filters?.status) {
+      query = query.eq('status', filters.status);
+    }
+    if (filters?.omc_id && (profile.role === 'admin' || profile.role === 'npa')) {
+      query = query.eq('omc_id', filters.omc_id);
+    }
+
+    const { data, error } = await query;
+
     if (error) {
-      console.error('Error fetching price caps:', error);
       return {
         success: false,
         error: extractErrorMessage(error)
       };
     }
 
-    console.log('Raw price caps data:', data); // Debug log
-
-    // Map the data to match our frontend interface
-    const mappedData = data?.map(cap => ({
-      id: cap.id,
-      product_id: cap.product_id,
-      product_name: cap.products?.name || 'Unknown Product', // Ensure product name is set
-      price_cap: cap.cap_price,
-      effective_date: cap.effective_from,
-      end_date: cap.effective_to,
-      status: this.calculatePriceCapStatus(cap.effective_from, cap.effective_to),
-      notes: cap.notes,
-      created_by: cap.created_by,
-      created_at: cap.created_at,
-      updated_at: cap.updated_at,
-      // Include additional product info if needed
-      product_unit: cap.products?.unit,
-      product_code: cap.products?.code
-    }));
-
-    console.log('Mapped price caps:', mappedData); // Debug log
-
     return {
       success: true,
-      data: mappedData || []
+      data: data || []
     };
 
   } catch (error: unknown) {
-    console.error('Exception in getPriceCaps:', error);
     return {
       success: false,
       error: 'Failed to fetch price caps: ' + extractErrorMessage(error)
     };
   }
 }
+
 /**
  * Calculate price cap status based on dates
  */
@@ -12488,726 +12967,2179 @@ private calculatePriceCapStatus(effectiveFrom: string, effectiveTo?: string): 'a
     }
   }
 
+// ===== COMMISSION API METHODS =====
 
-// ===== COMMISSION MANAGEMENT METHODS =====
-
-  /**
-   * Calculate commissions for a specific period
-   */
-  async calculateCommissions(request: CommissionCalculationRequest): Promise<APIResponse> {
-    const requestId = `commission_calc_${Date.now()}`;
+/**
+ * Calculate commissions using searchStations filtering approach
+ */
+async calculateCommissions(request: { period: string; station_ids?: string[] }): Promise<APIResponse> {
+  const requestId = `commission_calc_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
     
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      const { period, station_ids, force_recalculation = false } = request;
-
-      // Call PostgreSQL function for commission calculation
-      const { data, error } = await supabase.rpc('calculate_commissions_bulk', {
-        p_period: period,
-        p_station_ids: station_ids || [],
-        p_force_recalculation: force_recalculation
-      });
-
-      if (error) {
-        console.error(`Commission calculation error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: {
-          period,
-          calculations_completed: data?.processed_count || 0,
-          errors_count: data?.error_count || 0,
-          errors: data?.errors || [],
-          details: data
-        },
-        message: `Commissions calculated for ${data?.processed_count || 0} stations`,
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Commission calculation critical error:`, error);
+    if (authError || !user) {
       return {
         success: false,
-        error: 'Failed to calculate commissions',
+        error: 'Authentication required',
         request_id: requestId,
         timestamp: new Date().toISOString()
       };
     }
-  }
 
-  /**
-   * Get commissions with advanced filtering
-   */
-  async getCommissions(filters: CommissionFilters = {}): Promise<APIResponse<{ commissions: Commission[]; pagination: Record<string, unknown> }>> {
-    const requestId = `commissions_${Date.now()}`;
+    const { period, station_ids } = request;
+
+    // Validate period format
+    if (!period || !/^\d{4}-\d{2}$/.test(period)) {
+      return {
+        success: false,
+        error: 'Invalid period format. Use YYYY-MM',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log('🔄 Calculating commissions using searchStations filtering:', {
+      period,
+      user_id: user.id,
+      user_role: user.user_metadata?.role,
+      requested_station_ids: station_ids
+    });
+
+    // Calculate date range for the period
+    const year = parseInt(period.split('-')[0]);
+    const month = parseInt(period.split('-')[1]);
+    const startDate = `${period}-01`;
+    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+
+    console.log('📅 Date range for commission calculation:', { startDate, endDate });
+
+    // FIRST: Get stations using searchStations method (same as Station Management)
+    const stationsResponse = await this.searchStations({}, 1, 1000); // Get all accessible stations
+    if (!stationsResponse.success) {
+      throw new Error(`Failed to get stations: ${stationsResponse.error}`);
+    }
+
+    const userStations = stationsResponse.data?.stations || [];
+    console.log('🏪 User stations from searchStations method:', {
+      total_stations: userStations.length,
+      stations: userStations.map(s => ({ id: s.id, name: s.name, commission_rate: s.commission_rate }))
+    });
+
+    if (userStations.length === 0) {
+      return {
+        success: true,
+        data: {
+          calculations_completed: 0,
+          stations_processed: [],
+          total_commission: 0,
+          calculations: []
+        },
+        message: "No stations found for calculation",
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Filter stations if specific station_ids provided
+    let targetStations = userStations;
+    if (station_ids && station_ids.length > 0) {
+      targetStations = userStations.filter(station => station_ids.includes(station.id));
+      console.log('🎯 Filtered to specific stations:', {
+        requested: station_ids.length,
+        matched: targetStations.length,
+        stations: targetStations.map(s => s.name)
+      });
+    }
+
+    const targetStationIds = targetStations.map(station => station.id);
+
+    // Build tank stocks query with proper station filtering
+    let tankStocksQuery = supabase
+      .from('daily_tank_stocks')
+      .select(`
+        id,
+        station_id,
+        product_id,
+        opening_stock,
+        closing_stock,
+        received_stock,
+        sales,
+        stock_date,
+        stations (
+          name,
+          dealer_id,
+          omc_id,
+          commission_rate
+        ),
+        products (
+          name,
+          code
+        )
+      `)
+      .gte('stock_date', startDate)
+      .lte('stock_date', endDate)
+      .in('station_id', targetStationIds) // Use the filtered station IDs
+      .order('stock_date', { ascending: true });
+
+    console.log('🔍 Executing tank stocks query with searchStations filtered stations...');
+    const { data: tankStocksData, error: tankStocksError } = await tankStocksQuery;
+
+    if (tankStocksError) {
+      console.error('❌ Daily tank stocks query error:', tankStocksError);
+      return {
+        success: false,
+        error: `Database error: ${this.extractErrorMessage(tankStocksError)}`,
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log('📊 Tank stock data found for calculation:', {
+      total_records: tankStocksData?.length || 0,
+      stations_with_data: new Set(tankStocksData?.map(s => s.station_id)).size
+    });
+
+    if (!tankStocksData || tankStocksData.length === 0) {
+      return {
+        success: true,
+        data: {
+          calculations_completed: 0,
+          stations_processed: [],
+          total_commission: 0,
+          calculations: []
+        },
+        message: "No daily tank stock data found for calculation",
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Group tank stocks by station and calculate commissions
+    const stationData: { [key: string]: any } = {};
     
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
+    tankStocksData.forEach(stock => {
+      if (!stock.station_id) {
+        console.warn('Skipping tank stock without station_id:', stock.id);
+        return;
+      }
       
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
+      const station = stock.stations;
+      if (!station) {
+        console.warn('Skipping tank stock without station data:', stock.id);
+        return;
       }
 
-      const { 
-        page = 1, 
-        limit = 50, 
-        station_id, 
-        dealer_id, 
-        omc_id, 
-        period, 
-        status,
-        start_date,
-        end_date,
-        sort_by = 'created_at',
-        sort_order = 'desc'
-      } = filters;
+      if (!stationData[stock.station_id]) {
+        // Use commission rate from searchStations result for consistency
+        const stationFromSearch = targetStations.find(s => s.id === stock.station_id);
+        const commissionRate = stationFromSearch?.commission_rate || station?.commission_rate;
+        
+        stationData[stock.station_id] = {
+          stocks: [],
+          station: station,
+          commission_rate: this.validateCommissionRate(commissionRate, station.id, station.name),
+          total_volume: 0
+        };
+      }
+      
+      stationData[stock.station_id].stocks.push(stock);
+      // Use the auto-calculated sales column from the trigger
+      stationData[stock.station_id].total_volume += stock.sales || 0;
+    });
 
-      const offset = (page - 1) * limit;
+    const calculations = [];
+    let totalCommission = 0;
 
+    for (const [stationId, data] of Object.entries(stationData)) {
+      const totalVolume = data.total_volume;
+      const stationCommission = totalVolume * data.commission_rate;
+      
+      totalCommission += stationCommission;
+
+      // Create commission record
+      const commissionData = {
+        station_id: stationId,
+        dealer_id: data.station?.dealer_id,
+        omc_id: data.station?.omc_id,
+        period,
+        total_volume: totalVolume,
+        total_sales: 0, // We don't have sales amount from tank stocks
+        commission_rate: data.commission_rate,
+        commission_amount: stationCommission,
+        windfall_amount: 0,
+        shortfall_amount: 0,
+        total_commission: stationCommission,
+        status: 'pending',
+        calculated_at: new Date().toISOString(),
+        calculated_by: user.id,
+        data_source: 'daily_tank_stocks'
+      };
+
+      try {
+        // Upsert commission record
+        const { data: existing, error: checkError } = await supabase
+          .from('commissions')
+          .select('id')
+          .eq('station_id', stationId)
+          .eq('period', period)
+          .single();
+
+        if (checkError && checkError.code !== 'PGRST116') { // PGRST116 is "not found"
+          console.error('Error checking existing commission:', checkError);
+          throw checkError;
+        }
+
+        let upsertError;
+        if (existing) {
+          const { error } = await supabase
+            .from('commissions')
+            .update(commissionData)
+            .eq('id', existing.id);
+          upsertError = error;
+        } else {
+          const { error } = await supabase
+            .from('commissions')
+            .insert([commissionData]);
+          upsertError = error;
+        }
+
+        if (upsertError) {
+          console.error(`Error saving commission for station ${data.station?.name}:`, upsertError);
+          throw upsertError;
+        }
+
+        calculations.push({
+          station_id: stationId,
+          station_name: data.station?.name,
+          total_volume: totalVolume,
+          commission_rate: data.commission_rate,
+          total_commission: stationCommission,
+          days_with_data: data.stocks.length
+        });
+
+        console.log(`✅ Commission saved from tank stocks for ${data.station?.name}:`, stationCommission);
+
+      } catch (error) {
+        console.error(`Error processing commission for station ${data.station?.name}:`, error);
+        // Continue with other stations even if one fails
+      }
+    }
+
+    const results = {
+      calculations_completed: calculations.length,
+      stations_processed: calculations.map(c => c.station_id),
+      total_commission: totalCommission,
+      calculations
+    };
+
+    console.log('🎯 Commission calculation from tank stocks completed:', results);
+
+    return {
+      success: true,
+      data: results,
+      message: `Commissions calculated from tank stocks for ${calculations.length} stations`,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('❌ Tank stock commission calculation error:', error);
+    return {
+      success: false,
+      error: 'Failed to calculate commissions from tank stocks',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Get stations for commission component using the SAME searchStations method
+ */
+async getCommissionStations(): Promise<APIResponse> {
+  const requestId = `commission_stations_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log('🔍 Getting commission stations using searchStations method...');
+
+    // USE THE EXACT SAME searchStations METHOD AS STATION MANAGEMENT
+    const response = await this.searchStations({}, 1, 100); // Get all stations with no filters
+    
+    if (!response.success) {
+      console.error('❌ Failed to get stations via searchStations:', response.error);
+      return {
+        success: false,
+        error: response.error,
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const stations = response.data?.stations || [];
+    
+    console.log('✅ Commission stations loaded via searchStations:', {
+      count: stations.length,
+      stations: stations.map(s => ({ 
+        name: s.name, 
+        commission_rate: s.commission_rate,
+        dealer_id: s.dealer_id,
+        omc_id: s.omc_id
+      }))
+    });
+
+    return {
+      success: true,
+      data: stations,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('❌ Commission stations error:', error);
+    return {
+      success: false,
+      error: 'Failed to fetch commission stations',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Get commissions with pagination and filtering
+ */
+async getCommissions(filters: {
+  period?: string;
+  status?: string;
+  station_id?: string;
+  page?: number;
+  limit?: number;
+}): Promise<APIResponse> {
+  const requestId = `get_commissions_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const { period, status, station_id, page = 1, limit = 20 } = filters;
+
+    console.log('🔍 Getting commissions for user:', {
+      user_id: user.id,
+      user_role: user.user_metadata?.role,
+      filters
+    });
+
+    // Build query with proper role-based filtering
+    let query = supabase
+      .from('commissions')
+      .select(`
+        *,
+        stations (
+          name,
+          code,
+          location,
+          region,
+          dealer_id,
+          commission_rate,
+          dealers (
+            id,
+            name,
+            email
+          ),
+          omcs (
+            id,
+            name
+          )
+        )
+      `, { count: 'exact' });
+
+    // Apply role-based filtering
+    const userRole = user.user_metadata?.role;
+    if (userRole === 'dealer') {
+      console.log('👤 Filtering for dealer:', user.id);
+      query = query.eq('stations.dealer_id', user.id);
+    } else if (userRole === 'omc') {
+      console.log('🏭 Filtering for OMC:', user.id);
+      query = query.eq('stations.omc_id', user.id);
+    } else if (userRole === 'admin') {
+      console.log('👑 Admin - showing all commissions');
+      // Admin sees everything - no filter needed
+    }
+
+    // Apply filters
+    if (period) {
+      query = query.eq('period', period);
+    }
+    
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
+    
+    if (station_id && station_id !== 'all') {
+      query = query.eq('station_id', station_id);
+    }
+
+    // Add pagination
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    
+    query = query.range(from, to).order('calculated_at', { ascending: false });
+
+    const { data: commissions, error, count } = await query;
+
+    if (error) {
+      console.error('❌ Commissions query error:', error);
+      return {
+        success: false,
+        error: `Database error: ${this.extractErrorMessage(error)}`,
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log('✅ Commissions loaded:', {
+      user_role: user.user_metadata?.role,
+      count: commissions?.length || 0,
+      period,
+      station_id
+    });
+
+    const totalPages = count ? Math.ceil(count / limit) : 0;
+
+    const response = {
+      commissions: commissions || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        total_pages: totalPages,
+        has_next: page < totalPages,
+        has_prev: page > 1
+      }
+    };
+
+    return {
+      success: true,
+      data: response,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('❌ Get commissions error:', error);
+    return {
+      success: false,
+      error: 'Failed to fetch commissions',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+
+/**
+ * Get progressive commission data using searchStations filtering
+ */
+async getProgressiveCommissions(period: string, stationId?: string): Promise<APIResponse> {
+  const requestId = `progressive_commissions_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Validate period format
+    if (!period || !/^\d{4}-\d{2}$/.test(period)) {
+      return {
+        success: false,
+        error: 'Invalid period format. Use YYYY-MM',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const currentDate = new Date();
+    const today = currentDate.toISOString().split('T')[0];
+    
+    // Calculate date range
+    const year = parseInt(period.split('-')[0]);
+    const month = parseInt(period.split('-')[1]);
+    const startDate = `${period}-01`;
+    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+    const queryEndDate = today < endDate ? today : endDate;
+
+    console.log('📊 Getting progressive commissions using searchStations filtering:', {
+      user_id: user.id,
+      period,
+      stationId,
+      date_range: `${startDate} to ${queryEndDate}`
+    });
+
+    // FIRST: Get stations using searchStations method
+    const stationsResponse = await this.searchStations({}, 1, 1000);
+    if (!stationsResponse.success) {
+      return {
+        success: false,
+        error: `Failed to get stations: ${stationsResponse.error}`,
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    let targetStations = stationsResponse.data?.stations || [];
+    
+    // Apply station filter if provided
+    if (stationId && stationId !== 'all') {
+      targetStations = targetStations.filter(station => station.id === stationId);
+    }
+
+    const targetStationIds = targetStations.map(station => station.id);
+
+    if (targetStationIds.length === 0) {
+      return {
+        success: true,
+        data: [],
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Build query with searchStations filtered stations
+    let query = supabase
+      .from('daily_tank_stocks')
+      .select(`
+        stock_date,
+        sales,
+        opening_stock,
+        closing_stock,
+        received_stock,
+        station_id,
+        stations (
+          name,
+          commission_rate,
+          dealer_id,
+          omc_id
+        ),
+        products (
+          name,
+          code
+        )
+      `)
+      .gte('stock_date', startDate)
+      .lte('stock_date', queryEndDate)
+      .in('station_id', targetStationIds) // Use filtered station IDs
+      .order('stock_date', { ascending: true });
+
+    const { data: tankStocksData, error: tankStocksError } = await query;
+
+    if (tankStocksError) {
+      console.error('❌ Daily tank stocks query error:', tankStocksError);
+      return {
+        success: false,
+        error: `Database error: ${this.extractErrorMessage(tankStocksError)}`,
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    console.log('📊 Filtered daily tank stocks data loaded:', {
+      total_records: tankStocksData?.length || 0,
+      stations: targetStations.length
+    });
+
+    // Calculate progressive commissions from tank stocks
+    const progressiveData = this.calculateProgressiveFromTankStocks(tankStocksData || [], period);
+    
+    return {
+      success: true,
+      data: progressiveData,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('❌ Progressive commissions from tank stocks error:', error);
+    return {
+      success: false,
+      error: 'Failed to fetch progressive commissions from tank stocks',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Get commission statistics using searchStations filtering
+ */
+async getCommissionStats(filters: any = {}): Promise<APIResponse> {
+  const requestId = `commission_stats_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const { period, station_id } = filters;
+    const currentPeriod = period || new Date().toISOString().slice(0, 7);
+
+    // Calculate month progress
+    const monthProgress = this.calculateMonthProgress();
+
+    console.log('📊 Getting commission stats using searchStations filtering:', {
+      user_id: user.id,
+      period: currentPeriod,
+      station_id: station_id || 'all'
+    });
+
+    // FIRST: Get stations using searchStations method
+    const stationsResponse = await this.searchStations({}, 1, 1000);
+    if (!stationsResponse.success) {
+      console.error('❌ Failed to get stations for stats:', stationsResponse.error);
+      return {
+        success: true,
+        data: this.getEmptyStats(),
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    let userStations = stationsResponse.data?.stations || [];
+    
+    // Apply station filter if provided
+    if (station_id && station_id !== 'all') {
+      userStations = userStations.filter(station => station.id === station_id);
+    }
+
+    console.log('🏪 User stations for stats (via searchStations):', {
+      count: userStations.length,
+      stations: userStations.map(s => ({ 
+        id: s.id, 
+        name: s.name, 
+        commission_rate: s.commission_rate 
+      }))
+    });
+
+    if (userStations.length === 0) {
+      console.log('❌ No stations found for user in stats');
+      return {
+        success: true,
+        data: this.getEmptyStats(),
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // VALIDATE AND TRACK COMMISSION RATES PROPERLY
+    const stationCommissionRates = new Map();
+    const validatedRates = [];
+    const stationCommissionInfo = {};
+
+    userStations.forEach(station => {
+      const validatedRate = this.validateCommissionRate(
+        station.commission_rate, 
+        station.id, 
+        station.name
+      );
+      
+      stationCommissionRates.set(station.id, validatedRate);
+      validatedRates.push(validatedRate);
+      
+      // Track detailed commission info
+      stationCommissionInfo[station.id] = {
+        name: station.name,
+        original_rate: station.commission_rate,
+        validated_rate: validatedRate,
+        uses_default: Math.abs(validatedRate - 0.05) < 0.001 // Account for floating point
+      };
+    });
+
+    const stationIds = userStations.map(station => station.id);
+    
+    // Calculate average commission rate properly
+    const averageCommissionRate = validatedRates.length > 0 
+      ? validatedRates.reduce((sum, rate) => sum + rate, 0) / validatedRates.length
+      : 0.05;
+
+    console.log('📈 Commission rate summary from searchStations:', {
+      total_stations: userStations.length,
+      average_rate: averageCommissionRate.toFixed(4),
+      stations_using_default: validatedRates.filter(rate => Math.abs(rate - 0.05) < 0.001).length
+    });
+
+    // Create station info for the response
+  
+    userStations.forEach(station => {
+      stationCommissionInfo[station.id] = {
+        name: station.name,
+        original_rate: station.commission_rate,
+        validated_rate: stationCommissionRates.get(station.id),
+        uses_default: stationCommissionRates.get(station.id) === 0.05 && 
+                     (station.commission_rate === null || station.commission_rate === undefined || 
+                      this.validateCommissionRate(station.commission_rate) !== stationCommissionRates.get(station.id))
+      };
+    });
+
+    // Try to get commissions from database with proper filtering
+    let commissionsData: any[] = [];
+    try {
       let query = supabase
         .from('commissions')
         .select(`
           *,
-          station:stations (name, code, location, region),
-          dealer:dealers (name),
-          omc:omcs (name),
-          approver:profiles!commissions_approved_by_fkey (full_name),
-          payer:profiles!commissions_paid_by_fkey (full_name)
-        `, { count: 'exact' })
-        .order(sort_by, { ascending: sort_order === 'asc' });
+          stations (
+            dealer_id,
+            omc_id,
+            commission_rate
+          )
+        `)
+        .eq('period', currentPeriod)
+        .in('station_id', stationIds);
 
-      // Apply filters
-      if (station_id) query = query.eq('station_id', station_id);
-      if (dealer_id) query = query.eq('dealer_id', dealer_id);
-      if (omc_id) query = query.eq('omc_id', omc_id);
-      if (period) query = query.eq('period', period);
-      if (status && status !== 'all-statuses') query = query.eq('status', status);
-      if (start_date) query = query.gte('calculated_at', start_date);
-      if (end_date) query = query.lte('calculated_at', end_date);
+      const { data: commissions, error } = await query;
 
-      // Apply pagination
-      query = query.range(offset, offset + limit - 1);
-
-      const { data: commissions, error, count } = await query;
-
-      if (error) {
-        console.error(`Commissions fetch error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
+      if (!error && commissions) {
+        commissionsData = commissions;
+        console.log('📊 Found commission records for user:', {
+          user_role: user.user_metadata?.role,
+          count: commissionsData.length
+        });
       }
+    } catch (error) {
+      console.log('No commission records found, will use progressive data');
+    }
 
-      const total = count || 0;
-      const totalPages = Math.ceil(total / limit);
+    let currentMonthCommission = 0;
+    let monthToDateVolume = 0;
+    let totalCommission = 0;
+    let paidCommission = 0;
+    let pendingCommission = 0;
 
+    // If we have commission data, use it
+    if (commissionsData.length > 0) {
+      currentMonthCommission = commissionsData.reduce((sum, c) => sum + (c.total_commission || 0), 0);
+      monthToDateVolume = commissionsData.reduce((sum, c) => sum + (c.total_volume || 0), 0);
+      totalCommission = currentMonthCommission;
+      paidCommission = commissionsData.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.total_commission || 0), 0);
+      pendingCommission = commissionsData.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.total_commission || 0), 0);
+    } else {
+      // Fallback to progressive data from tank stocks with proper filtering
+      console.log('🔄 Falling back to progressive tank stock data for stats');
+      const progressiveResponse = await this.getProgressiveCommissions(currentPeriod, station_id);
+      
+      if (progressiveResponse.success) {
+        const progressiveData = progressiveResponse.data || [];
+        if (progressiveData.length > 0) {
+          const latestData = progressiveData[progressiveData.length - 1];
+          currentMonthCommission = latestData.cumulative_commission || 0;
+          monthToDateVolume = latestData.cumulative_volume || 0;
+          totalCommission = currentMonthCommission;
+          pendingCommission = currentMonthCommission;
+        }
+      } else {
+        // If no progressive data, calculate from tank stocks using actual commission rates
+        console.log('🔄 Calculating from tank stocks using actual commission rates');
+        const tankStockResponse = await this.calculateCommissionFromTankStocksForStats(
+          currentPeriod, 
+          stationIds, 
+          stationCommissionRates
+        );
+        
+        if (tankStockResponse.success) {
+          currentMonthCommission = tankStockResponse.data?.total_commission || 0;
+          monthToDateVolume = tankStockResponse.data?.total_volume || 0;
+          totalCommission = currentMonthCommission;
+          pendingCommission = currentMonthCommission;
+        }
+      }
+    }
+
+    const estimatedFinal = monthProgress > 0 ? (currentMonthCommission / monthProgress) * 100 : 0;
+
+    const totalStations = userStations.length;
+    const paidStations = commissionsData.filter(c => c.status === 'paid').length;
+    const pendingStations = commissionsData.filter(c => c.status === 'pending').length;
+
+    // Calculate today's commission from tank stocks using actual commission rates
+    const todayCommission = await this.calculateTodayCommissionFromTankStocksWithRates(
+      stationIds, 
+      stationCommissionRates
+    );
+
+    const stats = {
+      total_commission: totalCommission,
+      paid_commission: paidCommission,
+      pending_commission: pendingCommission,
+      current_month_commission: currentMonthCommission,
+      previous_month_commission: 0,
+      current_month_progress: monthProgress,
+      estimated_final_commission: estimatedFinal,
+      today_commission: todayCommission,
+      month_to_date_volume: monthToDateVolume,
+      windfall_total: 0,
+      shortfall_total: 0,
+      base_commission_total: currentMonthCommission,
+      current_windfall: 0,
+      current_shortfall: 0,
+      current_base_commission: currentMonthCommission,
+      total_stations: totalStations,
+      paid_stations: paidStations,
+      pending_stations: pendingStations,
+      average_commission_rate: averageCommissionRate,
+      station_commission_rates: Object.fromEntries(stationCommissionRates),
+      station_commission_info: stationCommissionInfo,
+      stations_using_default_rate: validatedRates.filter(rate => rate === 0.05).length
+    };
+
+    console.log('📊 Final stats for user:', {
+      user_role: user.user_metadata?.role,
+      source: commissionsData.length > 0 ? 'commissions_table' : 'calculated_from_tank_stocks',
+      period: currentPeriod,
+      station_count: totalStations,
+      current_month_commission: currentMonthCommission,
+      today_commission: todayCommission,
+      average_commission_rate: averageCommissionRate,
+      stations_using_default: validatedRates.filter(rate => rate === 0.05).length
+    });
+
+    return {
+      success: true,
+      data: stats,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('Commission stats error:', error);
+    // Return empty stats
+    return {
+      success: true,
+      data: this.getEmptyStats(),
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Calculate commission from tank stocks for stats using actual commission rates
+ */
+private async calculateCommissionFromTankStocksForStats(
+  period: string, 
+  stationIds: string[], 
+  commissionRates: Map<string, number>
+): Promise<APIResponse> {
+  try {
+    const currentDate = new Date();
+    const today = currentDate.toISOString().split('T')[0];
+    
+    // Calculate date range
+    const year = parseInt(period.split('-')[0]);
+    const month = parseInt(period.split('-')[1]);
+    const startDate = `${period}-01`;
+    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+    const queryEndDate = today < endDate ? today : endDate;
+
+    // Get tank stocks for the period
+    const { data: tankStocks, error } = await supabase
+      .from('daily_tank_stocks')
+      .select('stock_date, sales, station_id')
+      .gte('stock_date', startDate)
+      .lte('stock_date', queryEndDate)
+      .in('station_id', stationIds);
+
+    if (error) {
+      console.error('Error fetching tank stocks for stats:', error);
+      return {
+        success: false,
+        error: this.extractErrorMessage(error)
+      };
+    }
+
+    if (!tankStocks || tankStocks.length === 0) {
       return {
         success: true,
         data: {
-          commissions: commissions as Commission[],
-          pagination: {
-            page,
-            limit,
-            total,
-            total_pages: totalPages,
-            has_next: page < totalPages,
-            has_prev: page > 1
+          total_commission: 0,
+          total_volume: 0
+        }
+      };
+    }
+
+    // Calculate commission using actual station rates
+    let totalCommission = 0;
+    let totalVolume = 0;
+
+    tankStocks.forEach(stock => {
+      const stationRate = commissionRates.get(stock.station_id) || 0.05;
+      const salesVolume = stock.sales || 0;
+      const commission = salesVolume * stationRate;
+      
+      totalVolume += salesVolume;
+      totalCommission += commission;
+    });
+
+    console.log('💰 Commission calculation from tank stocks:', {
+      total_commission: totalCommission,
+      total_volume: totalVolume,
+      stations_count: stationIds.length,
+      tank_stock_records: tankStocks.length
+    });
+
+    return {
+      success: true,
+      data: {
+        total_commission: totalCommission,
+        total_volume: totalVolume
+      }
+    };
+
+  } catch (error) {
+    console.error('Error calculating commission from tank stocks:', error);
+    return {
+      success: false,
+      error: 'Failed to calculate commission from tank stocks'
+    };
+  }
+}
+
+/**
+ * Calculate today's commission from tank stocks using actual commission rates
+ */
+private async calculateTodayCommissionFromTankStocksWithRates(
+  stationIds: string[], 
+  commissionRates: Map<string, number>
+): Promise<number> {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+
+    // Get today's tank stocks
+    const { data: todayTankStocks, error } = await supabase
+      .from('daily_tank_stocks')
+      .select('sales, station_id')
+      .eq('stock_date', today)
+      .in('station_id', stationIds);
+
+    if (error) {
+      console.error('Database error fetching today tank stocks:', error);
+      return 0;
+    }
+
+    // Calculate total commission for today using actual station rates
+    const todayCommission = todayTankStocks?.reduce((total, stock) => {
+      const stationRate = commissionRates.get(stock.station_id) || 0.05;
+      const salesVolume = stock.sales || 0;
+      return total + (salesVolume * stationRate);
+    }, 0) || 0;
+
+    console.log('💰 Today commission calculated with actual rates:', {
+      commission: todayCommission,
+      tank_stock_records: todayTankStocks?.length || 0,
+      stations_count: stationIds.length
+    });
+
+    return todayCommission;
+
+  } catch (error) {
+    console.error('Error calculating today commission with rates:', error);
+    return 0;
+  }
+}
+
+/**
+ * Get default empty stats
+ */
+private getEmptyStats(): any {
+  return {
+    total_commission: 0,
+    paid_commission: 0,
+    pending_commission: 0,
+    current_month_commission: 0,
+    previous_month_commission: 0,
+    current_month_progress: 0,
+    estimated_final_commission: 0,
+    today_commission: 0,
+    month_to_date_volume: 0,
+    windfall_total: 0,
+    shortfall_total: 0,
+    base_commission_total: 0,
+    current_windfall: 0,
+    current_shortfall: 0,
+    current_base_commission: 0,
+    total_stations: 0,
+    paid_stations: 0,
+    pending_stations: 0,
+    average_commission_rate: 0.05,
+    stations_using_default_rate: 0
+  };
+}
+
+// ===== HELPER METHODS =====
+
+/**
+ * Validate commission rate and provide fallback with better debugging
+ */
+private validateCommissionRate(rate: any, stationId?: string, stationName?: string): number {
+  const stationInfo = stationName ? `${stationName} (${stationId})` : (stationId || 'unknown station');
+  
+  // Handle null/undefined/empty string
+  if (rate === null || rate === undefined || rate === '') {
+    console.warn(`📝 Commission rate missing for ${stationInfo}, using default 0.05`);
+    return 0.05;
+  }
+  
+  // Handle string conversion
+  const parsedRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
+  
+  // Validate the parsed rate
+  if (isNaN(parsedRate)) {
+    console.warn(`❌ Invalid commission rate format for ${stationInfo}: "${rate}", using default 0.05`);
+    return 0.05;
+  }
+  
+  if (parsedRate <= 0) {
+    console.warn(`❌ Commission rate too low for ${stationInfo}: ${parsedRate}, using default 0.05`);
+    return 0.05;
+  }
+  
+  if (parsedRate > 1) {
+    console.warn(`⚠️ Commission rate unusually high for ${stationInfo}: ${parsedRate}, using as-is`);
+    // Don't cap it, just warn - might be intentional
+  }
+  
+  // Log valid rates for debugging (only if different from default)
+  if (parsedRate !== 0.05 && (stationId || stationName)) {
+    console.log(`✅ Valid commission rate for ${stationInfo}: ${parsedRate}`);
+  }
+  
+  return parsedRate;
+}
+
+/**
+ * Extract clean error message from various error formats
+ */
+private extractErrorMessage(error: any): string {
+  if (!error) return 'Unknown error occurred';
+  
+  if (typeof error === 'string') return error;
+  if (error?.message) return error.message;
+  if (error?.error?.message) return error.error.message;
+  if (error?.details) return error.details;
+  if (error?.code) {
+    // Handle specific Supabase error codes
+    switch (error.code) {
+      case 'PGRST116':
+        return 'Record not found';
+      case '42501':
+        return 'Insufficient permissions';
+      case '42703':
+        return 'Invalid column reference';
+      case '42P01':
+        return 'Table does not exist';
+      default:
+        return `Error ${error.code}: ${error.message || 'Database error'}`;
+    }
+  }
+  
+  return 'An unexpected error occurred';
+}
+
+/**
+ * Calculate progressive commissions from daily_tank_stocks data
+ */
+private calculateProgressiveFromTankStocks(tankStocksData: any[], period: string): any {
+  const dailyCommissions: { [key: string]: any } = {};
+  let cumulativeCommission = 0;
+  let cumulativeVolume = 0;
+
+  // Group by date and calculate daily commissions from tank stocks
+  tankStocksData.forEach(stock => {
+    if (!stock.stock_date) return;
+    
+    const stockDate = stock.stock_date;
+    const commissionRate = this.validateCommissionRate(
+      stock.stations?.commission_rate, 
+      stock.station_id, 
+      stock.stations?.name
+    );
+    
+    // Use the auto-calculated sales column
+    const dailyVolume = stock.sales || 0;
+    const commission = dailyVolume * commissionRate;
+
+    if (!dailyCommissions[stockDate]) {
+      dailyCommissions[stockDate] = {
+        date: stockDate,
+        volume: 0,
+        commission_earned: 0,
+        tank_dip_count: 0,
+        opening_stock: 0,
+        closing_stock: 0,
+        received_stock: 0
+      };
+    }
+
+    dailyCommissions[stockDate].volume += dailyVolume;
+    dailyCommissions[stockDate].commission_earned += commission;
+    dailyCommissions[stockDate].tank_dip_count += 1;
+    dailyCommissions[stockDate].opening_stock += stock.opening_stock || 0;
+    dailyCommissions[stockDate].closing_stock += stock.closing_stock || 0;
+    dailyCommissions[stockDate].received_stock += stock.received_stock || 0;
+  });
+
+  // Convert to array and calculate cumulative values
+  const result = Object.values(dailyCommissions)
+    .sort((a: any, b: any) => a.date.localeCompare(b.date))
+    .map((day: any) => {
+      cumulativeCommission += day.commission_earned;
+      cumulativeVolume += day.volume;
+      
+      const date = new Date(day.date);
+      const today = new Date().toISOString().split('T')[0];
+      
+      return {
+        ...day,
+        cumulative_commission: cumulativeCommission,
+        cumulative_volume: cumulativeVolume,
+        day_of_month: date.getDate(),
+        day_name: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        is_today: day.date === today,
+        data_source: 'daily_tank_stocks'
+      };
+    });
+
+  return result;
+}
+
+// ===== WINDOWFALL/SHORTFALL API METHODS =====
+
+/**
+ * Get windfall/shortfall calculations (separate from commissions)
+ */
+async getWindfallShortfallData(period: string, stationId?: string): Promise<APIResponse> {
+  const requestId = `windfall_shortfall_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Get tank stock data with price information
+    let query = supabase
+      .from('tank_stocks')
+      .select(`
+        *,
+        station:stations (name, location),
+        product:products (name, code)
+      `)
+      .eq('period', period)
+      .order('created_at', { ascending: false });
+
+    if (stationId && stationId !== 'all') {
+      query = query.eq('station_id', stationId);
+    }
+
+    const { data: stockData, error: stockError } = await query;
+
+    if (stockError) {
+      return {
+        success: false,
+        error: extractErrorMessage(stockError),
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Calculate windfall/shortfall from stock price differences
+    const windfallShortfallData = this.calculateWindfallShortfallFromStocks(stockData || []);
+
+    return {
+      success: true,
+      data: windfallShortfallData,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('Windfall/shortfall error:', error);
+    return {
+      success: false,
+      error: 'Failed to fetch windfall/shortfall data',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Calculate windfall/shortfall based on stock price differences
+ */
+async calculateWindfallShortfall(request: {
+  period: string;
+  station_ids?: string[];
+}): Promise<APIResponse> {
+  const requestId = `windfall_shortfall_calc_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const { period, station_ids } = request;
+
+    // Get tank stock data for calculation
+    let query = supabase
+      .from('tank_stocks')
+      .select(`
+        *,
+        station:stations (name, dealer_id, omc_id)
+      `)
+      .eq('period', period);
+
+    if (station_ids && station_ids.length > 0) {
+      query = query.in('station_id', station_ids);
+    }
+
+    const { data: stockData, error: stockError } = await query;
+
+    if (stockError) {
+      return {
+        success: false,
+        error: extractErrorMessage(stockError),
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Calculate windfall/shortfall
+    const results = await this.calculateWindfallShortfallFromStocksDetailed(stockData || [], period, user.id);
+
+    return {
+      success: true,
+      data: results,
+      message: `Windfall/shortfall calculated for ${results.stations_processed.length} stations`,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('Windfall/shortfall calculation error:', error);
+    return {
+      success: false,
+      error: 'Failed to calculate windfall/shortfall',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+/**
+ * Get windfall/shortfall configuration for stations
+ */
+async getWindfallShortfallConfig(stationId?: string): Promise<APIResponse> {
+  const requestId = `windfall_config_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    let query = supabase
+      .from('station_configurations')
+      .select(`
+        *,
+        station:stations (name, location)
+      `)
+      .eq('config_type', 'windfall_shortfall');
+
+    if (stationId && stationId !== 'all') {
+      query = query.eq('station_id', stationId);
+    }
+
+    const { data: configData, error: configError } = await query;
+
+    if (configError) {
+      // Return default config if table doesn't exist
+      return {
+        success: true,
+        data: {
+          configurations: [],
+          default_config: {
+            windfall_enabled: true,
+            shortfall_enabled: true,
+            calculation_method: 'price_difference',
+            price_variance_threshold: 0.02, // 2%
+            exclude_tax: true
           }
         },
         request_id: requestId,
         timestamp: new Date().toISOString()
       };
-
-    } catch (error: unknown) {
-      console.error(`Commissions critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to fetch commissions',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
     }
-  }
 
-  /**
-   * Update commission status (approve/pay/cancel)
-   */
-  async updateCommissionStatus(
-    commissionId: string, 
-    updates: { status: Commission['status']; notes?: string }
-  ): Promise<APIResponse<Commission>> {
-    const requestId = `commission_update_${commissionId}_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      const updateData: Record<string, unknown> = {
-        status: updates.status,
-        updated_at: new Date().toISOString()
-      };
-
-      if (updates.notes) {
-        updateData.notes = updates.notes;
-      }
-
-      // Set approved_by when approving
-      if (updates.status === 'approved') {
-        updateData.approved_by = user.id;
-      }
-
-      // Set paid_by and paid_at when paying
-      if (updates.status === 'paid') {
-        updateData.paid_by = user.id;
-        updateData.paid_at = new Date().toISOString();
-      }
-
-      const { data: commission, error } = await supabase
-        .from('commissions')
-        .update(updateData)
-        .eq('id', commissionId)
-        .select(`
-          *,
-          station:stations (name, code),
-          dealer:dealers (name),
-          omc:omcs (name),
-          approver:profiles!commissions_approved_by_fkey (full_name),
-          payer:profiles!commissions_paid_by_fkey (full_name)
-        `)
-        .single();
-
-      if (error) {
-        console.error(`Commission update error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: commission as Commission,
-        message: `Commission ${updates.status} successfully`,
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Commission update critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to update commission status',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Mark commission as paid with payment details
-   */
-  async markCommissionAsPaid(paymentData: CommissionPaymentRequest): Promise<APIResponse<Commission>> {
-    const requestId = `commission_pay_${paymentData.commission_id}_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      // Create payment record
-      const { data: payment, error: paymentError } = await supabase
-        .from('commission_payments')
-        .insert({
-          commission_id: paymentData.commission_id,
-          payment_date: paymentData.payment_date,
-          payment_method: paymentData.payment_method,
-          reference_number: paymentData.reference_number,
-          notes: paymentData.notes,
-          paid_by: user.id,
-          created_at: new Date().toISOString()
-        })
-        .select()
-        .single();
-
-      if (paymentError) {
-        console.error(`Payment creation error:`, paymentError);
-        return {
-          success: false,
-          error: paymentextractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      // Update commission status to paid
-      const { data: commission, error: updateError } = await supabase
-        .from('commissions')
-        .update({
-          status: 'paid',
-          paid_by: user.id,
-          paid_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', paymentData.commission_id)
-        .select(`
-          *,
-          station:stations (name, code),
-          dealer:dealers (name),
-          omc:omcs (name),
-          approver:profiles!commissions_approved_by_fkey (full_name),
-          payer:profiles!commissions_paid_by_fkey (full_name)
-        `)
-        .single();
-
-      if (updateError) {
-        console.error(`Commission update error:`, updateError);
-        return {
-          success: false,
-          error: updateextractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: commission as Commission,
-        message: 'Commission marked as paid successfully',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Commission payment critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to mark commission as paid',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Get commission statistics
-   */
-  async getCommissionStats(filters?: {
-    start_date?: string;
-    end_date?: string;
-    dealer_id?: string;
-    omc_id?: string;
-  }): Promise<APIResponse<CommissionStats>> {
-    const requestId = `commission_stats_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      let query = supabase.from('commissions').select('*');
-
-      // Apply filters
-      if (filters?.start_date) query = query.gte('calculated_at', filters.start_date);
-      if (filters?.end_date) query = query.lte('calculated_at', filters.end_date);
-      if (filters?.dealer_id) query = query.eq('dealer_id', filters.dealer_id);
-      if (filters?.omc_id) query = query.eq('omc_id', filters.omc_id);
-
-      const { data: commissions, error } = await query;
-
-      if (error) {
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      const stats: CommissionStats = {
-        total_commissions: commissions?.length || 0,
-        pending_commissions: commissions?.filter(c => c.status === 'pending' || c.status === 'calculated').length || 0,
-        paid_commissions: commissions?.filter(c => c.status === 'paid').length || 0,
-        total_amount: commissions?.reduce((sum, c) => sum + c.total_commission, 0) || 0,
-        paid_amount: commissions?.filter(c => c.status === 'paid').reduce((sum, c) => sum + c.total_commission, 0) || 0,
-        pending_amount: commissions?.filter(c => c.status === 'pending' || c.status === 'calculated').reduce((sum, c) => sum + c.total_commission, 0) || 0,
-        by_period: commissions?.reduce((acc, c) => {
-          acc[c.period] = (acc[c.period] || 0) + c.total_commission;
-          return acc;
-        }, {} as Record<string, number>) || {}
-      };
-
-      return {
-        success: true,
-        data: stats,
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Commission stats critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to fetch commission statistics',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Get windfall/shortfall configurations
-   */
-  async getWindfallShortfallConfigs(filters: {
-    station_id?: string;
-    omc_id?: string;
-    type?: string;
-    is_active?: boolean;
-  } = {}): Promise<APIResponse<WindfallShortfallConfig[]>> {
-    const requestId = `windfall_shortfall_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      let query = supabase
-        .from('windfall_shortfall_configs')
-        .select(`
-          *,
-          station:stations (name, code),
-          omc:omcs (name),
-          creator:profiles!windfall_shortfall_configs_created_by_fkey (full_name)
-        `)
-        .order('effective_date', { ascending: false });
-
-      // Apply filters
-      if (filters.station_id) query = query.eq('station_id', filters.station_id);
-      if (filters.omc_id) query = query.eq('omc_id', filters.omc_id);
-      if (filters.type) query = query.eq('type', filters.type);
-      if (filters.is_active !== undefined) query = query.eq('is_active', filters.is_active);
-
-      const { data: configs, error } = await query;
-
-      if (error) {
-        console.error(`Windfall/shortfall configs fetch error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: configs as WindfallShortfallConfig[],
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Windfall/shortfall configs critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to fetch windfall/shortfall configurations',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Create windfall/shortfall configuration
-   */
-  async createWindfallShortfallConfig(configData: {
-    station_id: string;
-    type: 'windfall' | 'shortfall' | 'adjustment';
-    commission_rate: number;
-    threshold_amount?: number;
-    effective_date: string;
-    end_date?: string;
-    is_active?: boolean;
-  }): Promise<APIResponse<WindfallShortfallConfig>> {
-    const requestId = `windfall_shortfall_create_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      const createData = {
-        ...configData,
-        created_by: user.id,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        is_active: configData.is_active ?? true
-      };
-
-      const { data: config, error } = await supabase
-        .from('windfall_shortfall_configs')
-        .insert(createData)
-        .select(`
-          *,
-          station:stations (name, code),
-          omc:omcs (name),
-          creator:profiles!windfall_shortfall_configs_created_by_fkey (full_name)
-        `)
-        .single();
-
-      if (error) {
-        console.error(`Windfall/shortfall config create error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: config as WindfallShortfallConfig,
-        message: 'Windfall/shortfall configuration created successfully',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Windfall/shortfall config create critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to create windfall/shortfall configuration',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Run daily commission calculation
-   */
-  async runDailyCalculation(): Promise<APIResponse> {
-    const requestId = `daily_calc_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      // Get yesterday's date for calculation
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const period = yesterday.toISOString().slice(0, 7); // YYYY-MM format
-
-      // Call the commission calculation function
-      const { data, error } = await supabase.rpc('calculate_commissions_bulk', {
-        p_period: period,
-        p_station_ids: [],
-        p_force_recalculation: false
-      });
-
-      if (error) {
-        console.error(`Daily calculation error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: {
-          period,
-          calculations_completed: data?.processed_count || 0,
-          errors_count: data?.error_count || 0,
-          details: data
-        },
-        message: `Daily commissions calculated for ${data?.processed_count || 0} stations`,
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Daily calculation critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to run daily commission calculation',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Get recent commission calculations
-   */
-  async getRecentCalculations(limit: number = 10): Promise<APIResponse<any[]>> {
-    const requestId = `recent_calcs_${Date.now()}`;
-    
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        return {
-          success: false,
-          error: 'Authentication required',
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      // Get recent commissions with calculation details
-      const { data: commissions, error } = await supabase
-        .from('commissions')
-        .select(`
-          id,
-          period,
-          calculation_date,
-          calculated_at,
-          status,
-          total_commission,
-          station:stations (name)
-        `)
-        .order('calculated_at', { ascending: false })
-        .limit(limit);
-
-      if (error) {
-        console.error(`Recent calculations fetch error:`, error);
-        return {
-          success: false,
-          error: extractErrorMessage(error),
-          request_id: requestId,
-          timestamp: new Date().toISOString()
-        };
-      }
-
-      return {
-        success: true,
-        data: commissions || [],
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-
-    } catch (error: unknown) {
-      console.error(`Recent calculations critical error:`, error);
-      return {
-        success: false,
-        error: 'Failed to fetch recent calculations',
-        request_id: requestId,
-        timestamp: new Date().toISOString()
-      };
-    }
-  }
-
-  /**
-   * Get auto calculation configuration (mock - implement based on your setup)
-   */
-  async getAutoCalculationConfig(): Promise<APIResponse<AutoCalculationConfig>> {
-    // This would typically come from a settings table
-    // For now, return a mock response
     return {
       success: true,
       data: {
-        enabled: false,
-        schedule_time: '02:00',
-        timezone: 'UTC',
-        notify_on_completion: true,
-        notify_on_error: true
+        configurations: configData || [],
+        default_config: {
+          windfall_enabled: true,
+          shortfall_enabled: true,
+          calculation_method: 'price_difference',
+          price_variance_threshold: 0.02,
+          exclude_tax: true
+        }
       },
-      request_id: `auto_config_${Date.now()}`,
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('Windfall config error:', error);
+    return {
+      success: false,
+      error: 'Failed to fetch windfall/shortfall configuration',
+      request_id: requestId,
       timestamp: new Date().toISOString()
     };
   }
+}
 
-  /**
-   * Update auto calculation configuration (mock - implement based on your setup)
-   */
-  async updateAutoCalculationConfig(config: AutoCalculationConfig): Promise<APIResponse<AutoCalculationConfig>> {
-    // This would typically update a settings table
-    // For now, return a mock response
+/**
+ * Update windfall/shortfall configuration
+ */
+async updateWindfallShortfallConfig(configData: {
+  station_id: string;
+  windfall_enabled: boolean;
+  shortfall_enabled: boolean;
+  calculation_method: string;
+  price_variance_threshold: number;
+  exclude_tax: boolean;
+}): Promise<APIResponse> {
+  const requestId = `windfall_config_update_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return {
+        success: false,
+        error: 'Authentication required',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Only admin and OMC can update configurations
+    if (user.user_metadata?.role !== 'admin' && user.user_metadata?.role !== 'omc') {
+      return {
+        success: false,
+        error: 'Permission denied. Only admin and OMC can update configurations.',
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    const configRecord = {
+      ...configData,
+      config_type: 'windfall_shortfall',
+      updated_by: user.id,
+      updated_at: new Date().toISOString()
+    };
+
+    // Upsert configuration
+    const { data: existing } = await supabase
+      .from('station_configurations')
+      .select('id')
+      .eq('station_id', configData.station_id)
+      .eq('config_type', 'windfall_shortfall')
+      .single();
+
+    let result;
+    if (existing) {
+      result = await supabase
+        .from('station_configurations')
+        .update(configRecord)
+        .eq('id', existing.id);
+    } else {
+      result = await supabase
+        .from('station_configurations')
+        .insert(configRecord);
+    }
+
+    if (result.error) {
+      return {
+        success: false,
+        error: extractErrorMessage(result.error),
+        request_id: requestId,
+        timestamp: new Date().toISOString()
+      };
+    }
+
     return {
       success: true,
-      data: config,
-      message: 'Auto calculation configuration updated successfully',
-      request_id: `auto_config_update_${Date.now()}`,
+      data: configRecord,
+      message: 'Windfall/shortfall configuration updated successfully',
+      request_id: requestId,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error: unknown) {
+    console.error('Windfall config update error:', error);
+    return {
+      success: false,
+      error: 'Failed to update windfall/shortfall configuration',
+      request_id: requestId,
       timestamp: new Date().toISOString()
     };
   }
+}
+
+// ===== HELPER METHODS =====
+
+// ===== ESSENTIAL HELPER FUNCTIONS =====
+
+/**
+ * Extract clean error message from various error formats
+ */
+private extractErrorMessage(error: any): string {
+  if (!error) return 'Unknown error occurred';
+  
+  if (typeof error === 'string') return error;
+  if (error?.message) return error.message;
+  if (error?.error?.message) return error.error.message;
+  if (error?.details) return error.details;
+  if (error?.code) return `Error ${error.code}: ${error.message || 'Database error'}`;
+  
+  return 'An unexpected error occurred';
+}
+
+/**
+ * Check if a date string is today's date
+ */
+private isToday(dateString: string): boolean {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const inputDate = new Date(dateString).toISOString().split('T')[0];
+    return inputDate === today;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get default empty stats for commission statistics
+ */
+private getEmptyStats(): any {
+  return {
+    total_commission: 0,
+    paid_commission: 0,
+    pending_commission: 0,
+    current_month_commission: 0,
+    previous_month_commission: 0,
+    current_month_progress: 0,
+    estimated_final_commission: 0,
+    today_commission: 0,
+    month_to_date_volume: 0,
+    windfall_total: 0,
+    shortfall_total: 0,
+    base_commission_total: 0,
+    current_windfall: 0,
+    current_shortfall: 0,
+    current_base_commission: 0,
+    total_stations: 0,
+    paid_stations: 0,
+    pending_stations: 0
+  };
+}
+
+/**
+ * Validate commission rate and provide fallback with better debugging
+ */
+private validateCommissionRate(rate: any, stationId?: string, stationName?: string): number {
+  const stationInfo = stationName ? `${stationName} (${stationId})` : (stationId || 'unknown station');
+  
+  console.log(`🔍 Validating commission rate for ${stationInfo}:`, {
+    original_rate: rate,
+    type: typeof rate,
+    is_null: rate === null,
+    is_undefined: rate === undefined
+  });
+  
+  // Handle null/undefined/empty string
+  if (rate === null || rate === undefined || rate === '') {
+    console.warn(`📝 Commission rate missing for ${stationInfo}, using default 0.05`);
+    return 0.05;
+  }
+  
+  // Handle string conversion
+  const parsedRate = typeof rate === 'string' ? parseFloat(rate) : Number(rate);
+  
+  console.log(`🔍 Parsed rate for ${stationInfo}:`, parsedRate);
+  
+  // Validate the parsed rate
+  if (isNaN(parsedRate)) {
+    console.warn(`❌ Invalid commission rate format for ${stationInfo}: "${rate}", using default 0.05`);
+    return 0.05;
+  }
+  
+  if (parsedRate <= 0) {
+    console.warn(`❌ Commission rate too low for ${stationInfo}: ${parsedRate}, using default 0.05`);
+    return 0.05;
+  }
+  
+  // Log valid rates
+  console.log(`✅ Valid commission rate for ${stationInfo}: ${parsedRate}`);
+  
+  return parsedRate;
+}
+
+/**
+ * Calculate month progress percentage
+ */
+private calculateMonthProgress(): number {
+  const currentDate = new Date();
+  const currentDay = currentDate.getDate();
+  const totalDays = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+  const progress = (currentDay / totalDays) * 100;
+  return Math.min(Math.max(progress, 0), 100); // Clamp between 0-100%
+}
+
+// ===== COMMISSION CALCULATION HELPERS =====
+
+/**
+ * Calculate commission from tank stock data with proper validation
+ */
+private async calculateCommissionFromTankStocks(
+  stationId: string, 
+  tankStocks: any[], 
+  station: any, 
+  commissionRate: number,
+  period: string, 
+  userId: string
+): Promise<any> {
+  // Validate inputs
+  if (!stationId || !station || tankStocks.length === 0) {
+    throw new Error('Invalid inputs for commission calculation');
+  }
+
+  // Calculate totals using auto-calculated sales column
+  const totalVolume = tankStocks.reduce((sum, stock) => sum + (stock.sales || 0), 0);
+  const validatedRate = this.validateCommissionRate(commissionRate);
+  const totalCommission = totalVolume * validatedRate;
+
+  // Validate calculation results
+  if (totalVolume < 0) {
+    console.warn(`Negative volume detected for station ${stationId}: ${totalVolume}`);
+  }
+
+  // Create commission record
+  const commissionData = {
+    station_id: stationId,
+    dealer_id: station.dealer_id,
+    omc_id: station.omc_id,
+    period,
+    total_volume: Math.max(0, totalVolume), // Ensure non-negative
+    total_sales: 0, // Not available from tank stocks
+    commission_rate: validatedRate,
+    commission_amount: totalCommission,
+    windfall_amount: 0,
+    shortfall_amount: 0,
+    total_commission: totalCommission,
+    status: 'pending' as const,
+    calculated_at: new Date().toISOString(),
+    calculated_by: userId,
+    data_source: 'daily_tank_stocks'
+  };
+
+  try {
+    // Upsert commission record
+    const { data: existing, error: checkError } = await supabase
+      .from('commissions')
+      .select('id')
+      .eq('station_id', stationId)
+      .eq('period', period)
+      .single();
+
+    let result;
+    if (existing && !checkError) {
+      result = await supabase
+        .from('commissions')
+        .update(commissionData)
+        .eq('id', existing.id);
+    } else {
+      result = await supabase
+        .from('commissions')
+        .insert([commissionData]);
+    }
+
+    if (result.error) {
+      console.error(`Error saving commission for station ${stationId}:`, result.error);
+      throw new Error(`Failed to save commission: ${this.extractErrorMessage(result.error)}`);
+    }
+
+    console.log(`✅ Commission ${existing ? 'updated' : 'created'} for ${station.name}: ${totalCommission}`);
+
+    return {
+      station_id: stationId,
+      station_name: station.name,
+      total_volume: totalVolume,
+      commission_rate: validatedRate,
+      total_commission: totalCommission,
+      days_with_data: tankStocks.length,
+      record_action: existing ? 'updated' : 'created'
+    };
+
+  } catch (error) {
+    console.error(`Error in commission upsert for station ${stationId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Group tank stocks by station for batch processing
+ */
+private groupTankStocksByStation(tankStocksData: any[]): { [key: string]: any } {
+  const stationData: { [key: string]: any } = {};
+  
+  tankStocksData.forEach(stock => {
+    if (!stock.station_id) {
+      console.warn('Tank stock record missing station_id, skipping:', stock.id);
+      return;
+    }
+    
+    const station = stock.stations;
+    if (!station) {
+      console.warn(`No station data found for tank stock ${stock.id}, skipping`);
+      return;
+    }
+
+    if (!stationData[stock.station_id]) {
+      stationData[stock.station_id] = {
+        stocks: [],
+        station: station,
+        commission_rate: this.validateCommissionRate(station.commission_rate),
+        total_volume: 0
+      };
+    }
+    
+    stationData[stock.station_id].stocks.push(stock);
+    stationData[stock.station_id].total_volume += stock.sales || 0;
+  });
+
+  return stationData;
+}
+
+// ===== PROGRESSIVE CALCULATION HELPERS =====
+
+/**
+ * Calculate progressive commissions from tank stock data with enhanced analytics
+ */
+private calculateProgressiveFromTankStocks(tankStocksData: any[], period: string): any {
+  const dailyCommissions: { [key: string]: any } = {};
+  let cumulativeCommission = 0;
+  let cumulativeVolume = 0;
+
+  // Group by date and calculate daily commissions
+  tankStocksData.forEach(stock => {
+    if (!stock.stock_date) {
+      console.warn('Tank stock record missing date, skipping:', stock.id);
+      return;
+    }
+
+    const stockDate = stock.stock_date;
+    const commissionRate = this.validateCommissionRate(stock.stations?.commission_rate);
+    const dailyVolume = stock.sales || 0;
+    const commission = dailyVolume * commissionRate;
+
+    if (!dailyCommissions[stockDate]) {
+      dailyCommissions[stockDate] = {
+        date: stockDate,
+        volume: 0,
+        commission_earned: 0,
+        tank_dip_count: 0,
+        opening_stock: 0,
+        closing_stock: 0,
+        received_stock: 0,
+        products: new Set()
+      };
+    }
+
+    dailyCommissions[stockDate].volume += dailyVolume;
+    dailyCommissions[stockDate].commission_earned += commission;
+    dailyCommissions[stockDate].tank_dip_count += 1;
+    dailyCommissions[stockDate].opening_stock += stock.opening_stock || 0;
+    dailyCommissions[stockDate].closing_stock += stock.closing_stock || 0;
+    dailyCommissions[stockDate].received_stock += stock.received_stock || 0;
+    
+    // Track unique products
+    if (stock.products?.name) {
+      dailyCommissions[stockDate].products.add(stock.products.name);
+    }
+  });
+
+  // Convert to array and calculate cumulative values with enhanced analytics
+  const result = Object.values(dailyCommissions)
+    .sort((a: any, b: any) => a.date.localeCompare(b.date))
+    .map((day: any, index: number, array) => {
+      cumulativeCommission += day.commission_earned;
+      cumulativeVolume += day.volume;
+      
+      const date = new Date(day.date);
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Calculate daily trends
+      const previousDay = index > 0 ? array[index - 1] : null;
+      const volumeTrend = previousDay ? 
+        ((day.volume - previousDay.volume) / previousDay.volume) * 100 : 0;
+      
+      const commissionTrend = previousDay ? 
+        ((day.commission_earned - previousDay.commission_earned) / previousDay.commission_earned) * 100 : 0;
+
+      return {
+        ...day,
+        cumulative_commission: cumulativeCommission,
+        cumulative_volume: cumulativeVolume,
+        day_of_month: date.getDate(),
+        day_name: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        is_today: this.isToday(day.date),
+        data_source: 'daily_tank_stocks',
+        // Enhanced analytics
+        volume_trend: Math.round(volumeTrend * 100) / 100, // 2 decimal places
+        commission_trend: Math.round(commissionTrend * 100) / 100,
+        product_count: day.products.size,
+        products: Array.from(day.products).slice(0, 3), // Top 3 products
+        // Efficiency metrics
+        efficiency_ratio: day.opening_stock > 0 ? (day.volume / day.opening_stock) * 100 : 0
+      };
+    });
+
+  console.log(`📈 Progressive calculation completed: ${result.length} days processed`);
+  return result;
+}
+
+// ===== STATISTICS HELPERS =====
+
+/**
+ * Calculate comprehensive commission statistics
+ */
+private calculateCommissionStats(commissions: any[], period?: string): any {
+  const currentPeriod = period || new Date().toISOString().slice(0, 7);
+  const currentCommissions = commissions.filter(c => c.period === currentPeriod);
+  const previousCommissions = commissions.filter(c => {
+    const prevPeriod = new Date(currentPeriod + '-01');
+    prevPeriod.setMonth(prevPeriod.getMonth() - 1);
+    return c.period === prevPeriod.toISOString().slice(0, 7);
+  });
+
+  const monthProgress = this.calculateMonthProgress();
+  
+  // Current period calculations
+  const currentCommission = currentCommissions.reduce((sum, c) => sum + (c.total_commission || 0), 0);
+  const currentVolume = currentCommissions.reduce((sum, c) => sum + (c.total_volume || 0), 0);
+  
+  // Previous period calculations
+  const previousCommission = previousCommissions.reduce((sum, c) => sum + (c.total_commission || 0), 0);
+  
+  // Growth calculations
+  const commissionGrowth = previousCommission > 0 ? 
+    ((currentCommission - previousCommission) / previousCommission) * 100 : 0;
+
+  const estimatedFinal = monthProgress > 0 ? (currentCommission / monthProgress) * 100 : 0;
+
+  // Station counts
+  const totalStations = new Set(commissions.map(c => c.station_id)).size;
+  const paidStations = new Set(commissions.filter(c => c.status === 'paid').map(c => c.station_id)).size;
+  const pendingStations = new Set(commissions.filter(c => c.status === 'pending').map(c => c.station_id)).size;
+
+  return {
+    // Basic stats
+    total_commission: commissions.reduce((sum, c) => sum + (c.total_commission || 0), 0),
+    paid_commission: commissions.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.total_commission || 0), 0),
+    pending_commission: commissions.filter(c => c.status === 'pending').reduce((sum, c) => sum + (c.total_commission || 0), 0),
+    
+    // Current period
+    current_month_commission: currentCommission,
+    current_month_volume: currentVolume,
+    month_to_date_volume: currentVolume,
+    
+    // Historical comparison
+    previous_month_commission: previousCommission,
+    commission_growth: Math.round(commissionGrowth * 100) / 100,
+    
+    // Progress tracking
+    current_month_progress: monthProgress,
+    estimated_final_commission: Math.round(estimatedFinal),
+    
+    // Additional metrics
+    today_commission: 0, // Will be calculated separately
+    average_commission_per_station: totalStations > 0 ? currentCommission / totalStations : 0,
+    
+    // Windfall/shortfall (separate calculation)
+    windfall_total: 0,
+    shortfall_total: 0,
+    base_commission_total: currentCommission,
+    current_windfall: 0,
+    current_shortfall: 0,
+    current_base_commission: currentCommission,
+    
+    // Station metrics
+    total_stations: totalStations,
+    paid_stations: paidStations,
+    pending_stations: pendingStations,
+    active_stations: currentCommissions.length,
+    
+    // Performance indicators
+    payment_ratio: totalStations > 0 ? (paidStations / totalStations) * 100 : 0,
+    pending_ratio: totalStations > 0 ? (pendingStations / totalStations) * 100 : 0
+  };
+}
+
+/**
+ * Generate commission calculation summary for logging
+ */
+private generateCalculationSummary(calculations: any[], totalCommission: number): any {
+  const stationCount = calculations.length;
+  const totalVolume = calculations.reduce((sum, calc) => sum + (calc.total_volume || 0), 0);
+  const averageCommission = stationCount > 0 ? totalCommission / stationCount : 0;
+  const averageVolume = stationCount > 0 ? totalVolume / stationCount : 0;
+
+  return {
+    station_count: stationCount,
+    total_commission: totalCommission,
+    total_volume: totalVolume,
+    average_commission: Math.round(averageCommission * 100) / 100,
+    average_volume: Math.round(averageVolume * 100) / 100,
+    period_covered: calculations[0]?.period || 'unknown',
+    calculation_timestamp: new Date().toISOString(),
+    stations: calculations.map(calc => ({
+      station_id: calc.station_id,
+      station_name: calc.station_name,
+      commission: calc.total_commission,
+      volume: calc.total_volume
+    }))
+  };
+} 
+
+// ===== PERMISSION & AUTHORIZATION HELPERS =====
+
+/**
+ * Check if current user can manage commissions (admin, omc, dealer)
+ */
+async canManageCommissions(): Promise<boolean> {
+  const requestId = `can_manage_commissions_${Date.now()}`;
+  
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      console.log('❌ Auth failed for commission permissions check');
+      return false;
+    }
+
+    const userRole = user.user_metadata?.role;
+    const allowedRoles = ['admin', 'omc', 'dealer'];
+    const canManage = allowedRoles.includes(userRole);
+
+    console.log('🔐 Commission permissions check:', {
+      user_id: user.id,
+      user_role: userRole,
+      can_manage: canManage,
+      request_id: requestId
+    });
+
+    return canManage;
+
+  } catch (error: unknown) {
+    console.error('❌ Commission permissions check error:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if current user can calculate commissions (admin, omc only)
+ */
+async canCalculateCommissions(): Promise<boolean> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) return false;
+
+    const userRole = user.user_metadata?.role;
+    const allowedRoles = ['admin', 'omc'];
+    const canCalculate = allowedRoles.includes(userRole);
+
+    console.log('🧮 Commission calculation permissions:', {
+      user_id: user.id,
+      user_role: userRole,
+      can_calculate: canCalculate
+    });
+
+    return canCalculate;
+
+  } catch (error: unknown) {
+    console.error('Commission calculation permissions error:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if current user can approve commissions (admin, omc only)
+ */
+async canApproveCommissions(): Promise<boolean> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) return false;
+
+    const userRole = user.user_metadata?.role;
+    const allowedRoles = ['admin', 'omc'];
+    const canApprove = allowedRoles.includes(userRole);
+
+    console.log('✅ Commission approval permissions:', {
+      user_id: user.id,
+      user_role: userRole,
+      can_approve: canApprove
+    });
+
+    return canApprove;
+
+  } catch (error: unknown) {
+    console.error('Commission approval permissions error:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if current user can view commissions (all authenticated users)
+ */
+async canViewCommissions(): Promise<boolean> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    return !!user; // Any authenticated user can view
+  } catch (error: unknown) {
+    console.error('Commission view permissions error:', error);
+    return false;
+  }
+}
+
+/**
+ * Get user role for commission operations
+ */
+private async getUserCommissionRole(): Promise<{ role: string; userId: string } | null> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) return null;
+
+    return {
+      role: user.user_metadata?.role || 'unknown',
+      userId: user.id
+    };
+  } catch (error: unknown) {
+    console.error('Error getting user commission role:', error);
+    return null;
+  }
+}
+
+// ===== ESSENTIAL HELPER FUNCTIONS =====
+
+/**
+ * Extract clean error message from various error formats
+ */
+private extractErrorMessage(error: any): string {
+  if (!error) return 'Unknown error occurred';
+  
+  if (typeof error === 'string') return error;
+  if (error?.message) return error.message;
+  if (error?.error?.message) return error.error.message;
+  if (error?.details) return error.details;
+  if (error?.code) return `Error ${error.code}: ${error.message || 'Database error'}`;
+  
+  return 'An unexpected error occurred';
+}
 
 
+// ===== VALIDATION HELPERS =====
 
+/**
+ * Validate commission calculation request
+ */
+private validateCommissionRequest(request: { period: string; station_ids?: string[] }): { isValid: boolean; error?: string } {
+  if (!request.period) {
+    return { isValid: false, error: 'Period is required' };
+  }
+
+  // Validate period format (YYYY-MM)
+  const periodRegex = /^\d{4}-\d{2}$/;
+  if (!periodRegex.test(request.period)) {
+    return { isValid: false, error: 'Period must be in YYYY-MM format' };
+  }
+
+  // Validate period is not in future
+  const currentPeriod = new Date().toISOString().slice(0, 7);
+  if (request.period > currentPeriod) {
+    return { isValid: false, error: 'Cannot calculate commissions for future periods' };
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Sanitize station IDs for database query
+ */
+private sanitizeStationIds(stationIds?: string[]): string[] | undefined {
+  if (!stationIds || stationIds.length === 0) {
+    return undefined;
+  }
+
+  return stationIds.filter(id => {
+    if (typeof id !== 'string' || id.length !== 36) { // UUID validation
+      console.warn('Invalid station ID format, skipping:', id);
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Calculate windfall/shortfall from stock data
+ */
+private calculateWindfallShortfallFromStocks(stockData: any[]): any {
+  // This is a simplified calculation
+  // In reality, you would compare purchase price vs selling price over time
+  let windfallTotal = 0;
+  let shortfallTotal = 0;
+  const breakdown: any[] = [];
+
+  stockData.forEach((stock, index) => {
+    if (index > 0) {
+      const previousStock = stockData[index - 1];
+      const priceDifference = (stock.unit_price || 0) - (previousStock.unit_price || 0);
+      
+      if (priceDifference > 0) {
+        // Windfall - price increased
+        const windfall = priceDifference * (stock.quantity || 0);
+        windfallTotal += windfall;
+        breakdown.push({
+          date: stock.created_at,
+          station: stock.station?.name,
+          product: stock.product?.name,
+          type: 'windfall',
+          amount: windfall,
+          price_difference: priceDifference,
+          quantity: stock.quantity
+        });
+      } else if (priceDifference < 0) {
+        // Shortfall - price decreased
+        const shortfall = Math.abs(priceDifference) * (stock.quantity || 0);
+        shortfallTotal += shortfall;
+        breakdown.push({
+          date: stock.created_at,
+          station: stock.station?.name,
+          product: stock.product?.name,
+          type: 'shortfall',
+          amount: shortfall,
+          price_difference: priceDifference,
+          quantity: stock.quantity
+        });
+      }
+    }
+  });
+
+  return {
+    windfall_total: windfallTotal,
+    shortfall_total: shortfallTotal,
+    net_impact: windfallTotal - shortfallTotal,
+    breakdown,
+    summary: {
+      total_transactions: breakdown.length,
+      windfall_transactions: breakdown.filter(b => b.type === 'windfall').length,
+      shortfall_transactions: breakdown.filter(b => b.type === 'shortfall').length
+    }
+  };
+}
+
+/**
+ * Detailed windfall/shortfall calculation
+ */
+private async calculateWindfallShortfallFromStocksDetailed(stockData: any[], period: string, userId: string): Promise<any> {
+  const calculations = this.calculateWindfallShortfallFromStocks(stockData);
+  
+  // Store windfall/shortfall records (you might want to create a separate table for this)
+  const stations = [...new Set(stockData.map(stock => stock.station_id))];
+  
+  return {
+    calculations_completed: stations.length,
+    stations_processed: stations,
+    windfall_total: calculations.windfall_total,
+    shortfall_total: calculations.shortfall_total,
+    net_impact: calculations.net_impact,
+    breakdown: calculations.breakdown,
+    summary: calculations.summary
+  };
+}
+
+/**
+ * Check if date is today
+ */
+private isToday(dateString: string): boolean {
+  const today = new Date().toISOString().split('T')[0];
+  return dateString === today;
+}
 
 // ===== USER MANAGEMENT METHODS =====
 
@@ -13415,10 +15347,10 @@ private async validateRoleAssignment(role: string, assignments: { station_id?: s
   return { valid: errors.length === 0, errors };
 }
 
-/**
- * Enhanced user creation with proper timing and error handling
- */
-async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
+  /**
+   * Enhanced user creation with proper timing and error handling
+   */
+async adminCreateUser(userData: UserCreateData): Promise<APIResponse<User>> {
   try {
     console.log('🔄 Creating user with data:', userData);
 
@@ -13447,8 +15379,8 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
       };
     }
 
-    // Create user in auth system with ALL metadata
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+    // Create user in auth system with ALL metadata - USING ADMIN CLIENT
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: userData.email,
       password: userData.password,
       email_confirm: true,
@@ -13475,52 +15407,68 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
     // Wait a moment for the auth user to be fully committed
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // Prepare profile data with explicit entity assignments
-    const profileData: Record<string, unknown> = {
+    // Prepare profile data with ALL required fields
+    const profileData: any = {
       id: authData.user.id,
-      email: userData.email,
-      full_name: userData.full_name,
+      email: userData.email.trim().toLowerCase(),
+      full_name: userData.full_name.trim(),
       role: userData.role,
-      phone: userData.phone,
+      phone: userData.phone?.trim() || null,
       is_active: userData.status === 'active',
       email_verified: true,
+      department: 'operations', // Required field with default
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
 
-    // Only include entity assignments based on role
-    switch (userData.role) {
-      case 'dealer':
-        profileData.dealer_id = userData.dealer_id;
-        // Explicitly set to null to avoid any auto-assignment
-        profileData.station_id = null;
-        profileData.omc_id = null;
-        break;
-      case 'station_manager':
-      case 'attendant':
-        profileData.station_id = userData.station_id;
-        profileData.omc_id = null;
-        profileData.dealer_id = null;
-        break;
-      case 'omc':
-        profileData.omc_id = userData.omc_id;
-        profileData.station_id = null;
-        profileData.dealer_id = null;
-        break;
-      default:
-        // For admin, npa, supervisor - no entity assignments
-        profileData.station_id = null;
-        profileData.omc_id = null;
-        profileData.dealer_id = null;
+    // For NPA role, explicitly set all entity IDs to null
+    if (userData.role === 'npa') {
+      profileData.omc_id = null;
+      profileData.station_id = null;
+      profileData.dealer_id = null;
+    } else {
+      // Only include entity assignments based on role
+      switch (userData.role) {
+        case 'dealer':
+          profileData.dealer_id = userData.dealer_id || null;
+          profileData.station_id = null;
+          profileData.omc_id = null;
+          break;
+        case 'station_manager':
+        case 'attendant':
+          profileData.station_id = userData.station_id || null;
+          profileData.omc_id = null;
+          profileData.dealer_id = null;
+          break;
+        case 'omc':
+          profileData.omc_id = userData.omc_id || null;
+          profileData.station_id = null;
+          profileData.dealer_id = null;
+          break;
+        default:
+          // For admin, supervisor - no entity assignments
+          profileData.station_id = null;
+          profileData.omc_id = null;
+          profileData.dealer_id = null;
+      }
     }
 
-    console.log('📝 Creating profile with data:', profileData);
+    // Remove any undefined values (convert to null)
+    Object.keys(profileData).forEach(key => {
+      if (profileData[key] === undefined) {
+        profileData[key] = null;
+      }
+    });
+
+    console.log('📝 Creating profile with data:', JSON.stringify(profileData, null, 2));
 
     // Create user profile with retry logic
     let profileError = null;
     let profile = null;
     
     for (let attempt = 0; attempt < 3; attempt++) {
+      console.log(`🔄 Profile creation attempt ${attempt + 1}...`);
+      
       const { data: profileResult, error: profileResultError } = await supabase
         .from('profiles')
         .insert(profileData)
@@ -13534,15 +15482,25 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
 
       if (profileResultError) {
         profileError = profileResultError;
+        console.error(`❌ Profile creation attempt ${attempt + 1} failed:`, profileResultError);
+        
+        // Log the full error details
+        console.error('Error details:', {
+          message: profileResultError.message,
+          details: profileResultError.details,
+          hint: profileResultError.hint,
+          code: profileResultError.code
+        });
+
         if (profileResultError.code === '23503' && attempt < 2) {
-          // Foreign key constraint - wait and retry
-          console.log(`🔄 Retry ${attempt + 1} for profile creation...`);
+          console.log(`🔄 Retrying profile creation...`);
           await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
           continue;
         }
         break;
       } else {
         profile = profileResult;
+        console.log('✅ Profile created successfully:', profile);
         break;
       }
     }
@@ -13553,7 +15511,6 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
       // Enhanced error handling
       if (profileError.code === '23503') {
         // Foreign key constraint - auth user might not be ready yet
-        // But we'll consider this a partial success since auth user was created
         await this.logUserActivity('user_create_partial', authData.user.id, {
           role: userData.role,
           error: 'Profile creation pending - user can complete setup on login'
@@ -13569,6 +15526,7 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
             phone: userData.phone,
             is_active: userData.status === 'active',
             email_verified: true,
+            department: 'operations',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           } as User,
@@ -13578,11 +15536,11 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
       }
 
       // Clean up: delete the auth user if profile creation fails for other reasons
-      await supabase.auth.admin.deleteUser(authData.user.id);
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
       
       return {
         success: false,
-        error: profileextractErrorMessage(error),
+        error: this.extractErrorMessage(profileError),
         timestamp: new Date().toISOString()
       };
     }
@@ -13607,11 +15565,12 @@ async createUser(userData: UserCreateData): Promise<APIResponse<User>> {
     console.error('❌ User creation error:', error);
     return {
       success: false,
-      error: 'Failed to create user: ' + extractErrorMessage(error),
+      error: 'Failed to create user: ' + this.extractErrorMessage(error),
       timestamp: new Date().toISOString()
     };
   }
 }
+
 /**
  * Enhanced user update with dealer role fix
  */

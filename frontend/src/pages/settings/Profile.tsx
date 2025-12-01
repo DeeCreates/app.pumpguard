@@ -6,7 +6,24 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Camera, Mail, Phone, MapPin, Calendar, Edit, Save, Loader2, AlertCircle, Shield, UserCheck } from "lucide-react";
+import { 
+  Camera, 
+  Mail, 
+  Phone, 
+  MapPin, 
+  Calendar, 
+  Edit, 
+  Save, 
+  Loader2, 
+  AlertCircle, 
+  Shield, 
+  UserCheck,
+  Download,
+  Eye,
+  EyeOff,
+  CheckCircle2,
+  XCircle
+} from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
@@ -68,13 +85,24 @@ interface ValidationErrors {
   [key: string]: string | undefined;
 }
 
+interface ActivityLog {
+  id: string;
+  action: string;
+  description: string;
+  timestamp: string;
+  ipAddress: string;
+}
+
 export default function Profile() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [stats, setStats] = useState<PerformanceStats | null>(null);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const [exportingData, setExportingData] = useState(false);
   const [formData, setFormData] = useState<ProfileFormData>({
     firstName: '',
     lastName: '',
@@ -97,74 +125,80 @@ export default function Profile() {
     loadProfileData();
   }, []);
 
-const loadProfileData = async () => {
-  try {
-    setLoading(true);
-    setErrors({});
+  const loadProfileData = async () => {
+    try {
+      setLoading(true);
+      setErrors({});
 
-    // Use Promise.allSettled to handle individual API failures
-    const [profileResponse, statsResponse] = await Promise.allSettled([
-      api.getUserProfile(),
-      api.getUserPerformanceStats()
-    ]);
+      // Use Promise.allSettled to handle individual API failures
+      const [profileResponse, statsResponse, activityResponse] = await Promise.allSettled([
+        api.getUserProfile(),
+        api.getUserPerformanceStats(),
+        api.getUserActivityLogs?.({ limit: 5 }) // Optional activity logs
+      ]);
 
-    // Handle profile response
-    if (profileResponse.status === 'fulfilled' && profileResponse.value.success) {
-      const userData = profileResponse.value.data;
-      const transformedUser = transformUserData(userData);
-      setUser(transformedUser);
-      setFormData({
-        firstName: transformedUser.firstName,
-        lastName: transformedUser.lastName,
-        email: transformedUser.email,
-        phone: transformedUser.phone || '',
-        address: transformedUser.location || '',
-        department: transformedUser.department || 'operations',
-        emergencyContact: transformedUser.emergencyContact || {
-          name: '',
-          relationship: '',
-          phone: ''
-        }
+      // Handle profile response
+      if (profileResponse.status === 'fulfilled' && profileResponse.value.success) {
+        const userData = profileResponse.value.data;
+        const transformedUser = transformUserData(userData);
+        setUser(transformedUser);
+        setFormData({
+          firstName: transformedUser.firstName,
+          lastName: transformedUser.lastName,
+          email: transformedUser.email,
+          phone: transformedUser.phone || '',
+          address: transformedUser.location || '',
+          department: transformedUser.department || 'operations',
+          emergencyContact: transformedUser.emergencyContact || {
+            name: '',
+            relationship: '',
+            phone: ''
+          }
+        });
+      } else {
+        const errorMsg = profileResponse.status === 'rejected' 
+          ? 'Failed to load profile' 
+          : profileResponse.value?.error || 'Profile not found';
+        throw new Error(errorMsg);
+      }
+
+      // Handle stats response - this can fail without breaking the whole page
+      if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
+        setStats(statsResponse.value.data);
+      } else {
+        console.warn('Failed to load performance stats, using defaults');
+        // Set default stats so the UI still works
+        setStats({
+          totalShifts: 0,
+          salesProcessed: 0,
+          transactions: 0,
+          accuracyRate: 100,
+          complianceScore: 100,
+          avgTransactionValue: 0
+        });
+      }
+
+      // Handle activity logs - optional feature
+      if (activityResponse.status === 'fulfilled' && activityResponse.value?.success) {
+        setActivityLogs(activityResponse.value.data || []);
+      }
+
+    } catch (error: any) {
+      console.error('Error loading profile data:', error);
+      setErrors({ 
+        fetch: error.message || 'Failed to load profile data' 
       });
-    } else {
-      const errorMsg = profileResponse.status === 'rejected' 
-        ? 'Failed to load profile' 
-        : profileResponse.value?.error || 'Profile not found';
-      throw new Error(errorMsg);
-    }
-
-    // Handle stats response - this can fail without breaking the whole page
-    if (statsResponse.status === 'fulfilled' && statsResponse.value.success) {
-      setStats(statsResponse.value.data);
-    } else {
-      console.warn('Failed to load performance stats, using defaults');
-      // Set default stats so the UI still works
-      setStats({
-        totalShifts: 0,
-        salesProcessed: 0,
-        transactions: 0,
-        accuracyRate: 100,
-        complianceScore: 100,
-        avgTransactionValue: 0
+      
+      toast({
+        title: "Error Loading Profile",
+        description: error.message || "Unable to load your profile information",
+        variant: "destructive",
+        duration: 5000
       });
+    } finally {
+      setLoading(false);
     }
-
-  } catch (error: any) {
-    console.error('Error loading profile data:', error);
-    setErrors({ 
-      fetch: error.message || 'Failed to load profile data' 
-    });
-    
-    toast({
-      title: "Error Loading Profile",
-      description: error.message || "Unable to load your profile information",
-      variant: "destructive",
-      duration: 5000
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const transformUserData = (apiData: any): UserProfile => {
     return {
@@ -442,6 +476,53 @@ const loadProfileData = async () => {
     }
   };
 
+  const handleExportData = async (format: 'json' | 'pdf' = 'json') => {
+    try {
+      setExportingData(true);
+      
+      let response;
+      if (format === 'pdf') {
+        response = await api.exportProfilePDF?.();
+      } else {
+        response = await api.exportProfileData?.();
+      }
+
+      if (response?.success) {
+        // Create and download file
+        const blob = format === 'pdf' 
+          ? new Blob([response.data], { type: 'application/pdf' })
+          : new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `profile-export-${new Date().toISOString().split('T')[0]}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        toast({
+          title: "Export Successful",
+          description: `Your profile data has been exported as ${format.toUpperCase()}`,
+        });
+
+        setShowExportOptions(false);
+      } else {
+        throw new Error(response?.error || "Export failed");
+      }
+    } catch (error: any) {
+      console.error('Error exporting data:', error);
+      toast({
+        title: "Export Failed",
+        description: error.message || "Failed to export profile data",
+        variant: "destructive"
+      });
+    } finally {
+      setExportingData(false);
+    }
+  };
+
   const getInitials = (firstName: string, lastName: string) => {
     return `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
   };
@@ -470,6 +551,12 @@ const loadProfileData = async () => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getStatusColor = (score: number) => {
+    if (score >= 90) return 'text-green-600';
+    if (score >= 80) return 'text-yellow-600';
+    return 'text-red-600';
   };
 
   if (loading) {
@@ -519,6 +606,19 @@ const loadProfileData = async () => {
           <p className="text-gray-600">Manage your personal information and preferences</p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            onClick={() => setShowExportOptions(!showExportOptions)}
+            disabled={exportingData}
+          >
+            {exportingData ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4 mr-2" />
+            )}
+            Export Data
+          </Button>
+          
           {editing ? (
             <>
               <Button variant="outline" onClick={handleCancelEdit} disabled={saving}>
@@ -546,6 +646,50 @@ const loadProfileData = async () => {
           )}
         </div>
       </div>
+
+      {/* Export Options Modal */}
+      {showExportOptions && (
+        <Card className="bg-blue-50 border-blue-200">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-blue-900">Export Profile Data</h3>
+                <p className="text-sm text-blue-700">Choose your preferred format</p>
+              </div>
+              <div className="flex gap-2">
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => handleExportData('json')}
+                  disabled={exportingData}
+                >
+                  {exportingData ? (
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  ) : (
+                    <Download className="w-3 h-3 mr-1" />
+                  )}
+                  JSON
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => handleExportData('pdf')}
+                  disabled={exportingData || !api.exportProfilePDF}
+                >
+                  PDF
+                </Button>
+                <Button 
+                  size="sm" 
+                  variant="ghost" 
+                  onClick={() => setShowExportOptions(false)}
+                >
+                  <XCircle className="w-3 h-3" />
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Profile Overview */}
@@ -661,16 +805,48 @@ const loadProfileData = async () => {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600">Accuracy Rate</span>
-                    <span className="font-semibold">{stats.accuracyRate}%</span>
+                    <span className={`font-semibold ${getStatusColor(stats.accuracyRate)}`}>
+                      {stats.accuracyRate}%
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600">Compliance Score</span>
-                    <span className="font-semibold">{stats.complianceScore}%</span>
+                    <span className={`font-semibold ${getStatusColor(stats.complianceScore)}`}>
+                      {stats.complianceScore}%
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600">Avg. Transaction</span>
                     <span className="font-semibold">{formatCurrency(stats.avgTransactionValue)}</span>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Recent Activity */}
+          {activityLogs.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Eye className="w-5 h-5" />
+                  Recent Activity
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {activityLogs.slice(0, 3).map((log) => (
+                    <div key={log.id} className="flex items-start space-x-3 p-2 rounded-lg bg-gray-50">
+                      <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{log.action}</p>
+                        <p className="text-xs text-gray-600 truncate">{log.description}</p>
+                        <p className="text-xs text-gray-500">
+                          {formatDateTime(log.timestamp)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../utils/supabase-client';
+import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "@/contexts/AuthContext";
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Card } from './ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from './ui/dialog';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
+import { Card } from '../ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '../ui/dialog';
 import { Activity, Thermometer, Droplet, Plus, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export function IoTDashboard() {

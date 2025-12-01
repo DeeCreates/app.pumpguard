@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   Search, 
@@ -16,7 +16,9 @@ import {
   Clock,
   Edit,
   Trash2,
-  MoreVertical
+  MoreVertical,
+  Building,
+  MapPin
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
@@ -50,6 +52,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 
 interface Creditor {
   id: string;
@@ -70,21 +73,153 @@ interface Creditor {
   updated_at?: string;
 }
 
+interface Station {
+  id: string;
+  name: string;
+  code: string;
+  location?: string;
+  manager_id?: string;
+}
+
 interface CreditorsManagerProps {
   stationId?: string;
   compact?: boolean;
   userRole: 'admin' | 'omc' | 'dealer' | 'station_manager' | 'attendant';
   userStations?: string[];
+  userId?: string;
 }
 
-// Lazy loaded components
-const LazyExportButton = lazy(() => import('./LazyExportButton'));
+// Simple Export Button Component
+const ExportButton = ({ data, filename }: { data: any[], filename: string }) => {
+  const handleExport = () => {
+    if (data.length === 0) {
+      toast.error('No data to export');
+      return;
+    }
+
+    try {
+      const csvContent = convertToCSV(data);
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${filename}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast.success('Data exported successfully');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export data');
+    }
+  };
+
+  const convertToCSV = (arr: any[]) => {
+    const array = [Object.keys(arr[0])].concat(arr);
+    return array.map(it => {
+      return Object.values(it).toString();
+    }).join('\n');
+  };
+
+  return (
+    <Button variant="outline" onClick={handleExport} className="gap-2">
+      <Download className="w-4 h-4" />
+      Export
+    </Button>
+  );
+};
+
+// Simple Charts Component
+const Charts = ({ creditors }: { creditors: Creditor[] }) => {
+  if (creditors.length === 0) {
+    return (
+      <Card className="bg-white rounded-2xl shadow-sm border-0">
+        <CardContent className="pt-6 text-center py-12">
+          <div className="text-gray-500">
+            <TrendingUp className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <p className="text-lg mb-2">No data for charts</p>
+            <p className="text-sm">Add creditors to see analytics</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const statusCounts = creditors.reduce((acc, creditor) => {
+    acc[creditor.status] = (acc[creditor.status] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  const totalAmount = creditors.reduce((sum, c) => sum + c.amount, 0);
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <Card className="bg-white rounded-2xl shadow-sm border-0">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="w-5 h-5" />
+            Status Distribution
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {Object.entries(statusCounts).map(([status, count]) => (
+              <div key={status} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div 
+                    className={`w-3 h-3 rounded-full ${
+                      status === 'paid' ? 'bg-green-500' :
+                      status === 'overdue' ? 'bg-red-500' : 'bg-yellow-500'
+                    }`}
+                  />
+                  <span className="capitalize">{status}</span>
+                </div>
+                <span className="font-semibold">{count}</span>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-white rounded-2xl shadow-sm border-0">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <DollarSign className="w-5 h-5" />
+            Amount Summary
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span>Total Credit</span>
+              <span className="font-semibold">₵{totalAmount.toLocaleString()}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Average per Creditor</span>
+              <span className="font-semibold">
+                ₵{(totalAmount / creditors.length).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Total Creditors</span>
+              <span className="font-semibold">{creditors.length}</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
 
 export function CreditorsManager({ 
   stationId, 
   compact = false, 
   userRole,
-  userStations = []
+  userStations = [],
+  userId
 }: CreditorsManagerProps) {
   const [creditors, setCreditors] = useState<Creditor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,10 +229,12 @@ export function CreditorsManager({
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [selectedCreditor, setSelectedCreditor] = useState<Creditor | null>(null);
   const [selectedStation, setSelectedStation] = useState<string>(stationId || '');
-  const [availableStations, setAvailableStations] = useState<any[]>([]);
+  const [availableStations, setAvailableStations] = useState<Station[]>([]);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
   
   const [newCreditor, setNewCreditor] = useState({
     name: '',
@@ -119,49 +256,97 @@ export function CreditorsManager({
     station_id: '',
   });
 
-  // Check user permissions
+  // Enhanced permission system
   const canViewAllStations = userRole === 'admin' || userRole === 'omc';
-  const canManageCreditors = userRole === 'admin' || userRole === 'omc' || userRole === 'station_manager';
+  const canManageAllStations = userRole === 'admin' || userRole === 'omc';
+  const canManageStation = userRole === 'station_manager';
   const canViewCreditors = userRole === 'dealer' || userRole === 'attendant';
+  
+  const canAddCreditors = userRole === 'admin' || userRole === 'omc' || userRole === 'station_manager';
+  const canEditCreditors = userRole === 'admin' || userRole === 'omc' || userRole === 'station_manager';
   const canDeleteCreditors = userRole === 'admin' || userRole === 'omc';
+  const canMarkPayments = userRole === 'admin' || userRole === 'omc' || userRole === 'station_manager';
+
+  // Get accessible stations based on role
+  const getAccessibleStations = (): string[] => {
+    if (canViewAllStations) {
+      return availableStations.map(station => station.id);
+    }
+    if (userStations.length > 0) {
+      return userStations;
+    }
+    if (stationId) {
+      return [stationId];
+    }
+    return [];
+  };
 
   useEffect(() => {
     loadAvailableStations();
-    loadCreditors();
-  }, [stationId, selectedStation]);
+  }, [userRole, userStations]);
+
+  useEffect(() => {
+    if (availableStations.length > 0) {
+      loadCreditors();
+    }
+  }, [selectedStation, availableStations]);
 
   const loadAvailableStations = async () => {
-    if (canViewAllStations) {
-      try {
+    try {
+      let stations: Station[] = [];
+      
+      if (canViewAllStations) {
+        // Admin/OMC can see all stations
         const response = await api.getAllStations();
         if (response.success) {
-          setAvailableStations(response.data || []);
-          if (!selectedStation && response.data?.length > 0) {
-            setSelectedStation(response.data[0].id);
-          }
+          stations = response.data || [];
         }
-      } catch (error) {
-        console.error('Error loading stations:', error);
-        toast.error('Failed to load stations');
+      } else if (userStations.length > 0) {
+        // Station manager/dealer can see their assigned stations
+        const response = await api.getStationsByIds(userStations);
+        if (response.success) {
+          stations = response.data || [];
+        }
+      } else if (stationId) {
+        // Single station view
+        const response = await api.getStation(stationId);
+        if (response.success) {
+          stations = [response.data];
+        }
       }
+
+      setAvailableStations(stations);
+      
+      // Set default selected station
+      if (!selectedStation && stations.length > 0) {
+        setSelectedStation(stations[0].id);
+      } else if (stationId && stations.some(s => s.id === stationId)) {
+        setSelectedStation(stationId);
+      }
+      
+    } catch (error) {
+      console.error('Error loading stations:', error);
+      toast.error('Failed to load stations');
     }
   };
 
   const loadCreditors = async () => {
+    if (!selectedStation && !canViewAllStations) {
+      setCreditors([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
       let targetStationIds: string[] = [];
       
-      if (stationId) {
-        targetStationIds = [stationId];
-      } else if (selectedStation) {
+      if (selectedStation) {
         targetStationIds = [selectedStation];
+      } else if (canViewAllStations) {
+        targetStationIds = availableStations.map(station => station.id);
       } else if (userStations.length > 0) {
         targetStationIds = userStations;
-      } else if (canViewAllStations) {
-        const stationsResponse = await api.getAllStations();
-        targetStationIds = stationsResponse.success ? 
-          (stationsResponse.data || []).map((s: any) => s.id) : [];
       }
 
       if (targetStationIds.length === 0) {
@@ -170,7 +355,7 @@ export function CreditorsManager({
         return;
       }
 
-      // Simulated API call
+      // Mock data for demonstration - replace with actual API call
       const mockCreditors: Creditor[] = [
         {
           id: '1',
@@ -215,13 +400,14 @@ export function CreditorsManager({
           created_at: '2025-10-05T08:00:00Z',
           updated_at: '2025-10-18T14:00:00Z',
         },
-      ].filter(creditor => targetStationIds.includes(creditor.station_id));
+      ];
 
       setCreditors(mockCreditors);
       
     } catch (error) {
       console.error('Error loading creditors:', error);
       toast.error('Failed to load creditors');
+      setCreditors([]);
     } finally {
       setLoading(false);
     }
@@ -238,6 +424,7 @@ export function CreditorsManager({
     return matchesSearch && matchesStatus;
   });
 
+  // Calculate statistics
   const stats = {
     total: creditors.reduce((sum, c) => sum + c.amount, 0),
     pending: creditors.filter((c) => c.status === 'pending').reduce((sum, c) => sum + c.amount, 0),
@@ -254,29 +441,35 @@ export function CreditorsManager({
       return;
     }
 
-    if (!canManageCreditors) {
+    if (!canAddCreditors) {
       toast.error('You do not have permission to add creditors');
       return;
     }
 
     setActionLoading('add');
     try {
-      const creditor: Creditor = {
-        id: Date.now().toString(),
+      const creditorData = {
         name: newCreditor.name,
         phone: newCreditor.phone,
         vehicle_number: newCreditor.vehicle_number,
         amount: parseFloat(newCreditor.amount),
-        date: new Date().toISOString().split('T')[0],
         due_date: newCreditor.due_date,
-        status: 'pending',
         notes: newCreditor.notes,
         station_id: newCreditor.station_id,
+        created_by: userId,
+      };
+
+      // Mock API call - replace with actual API
+      const newCreditorObj: Creditor = {
+        id: Date.now().toString(),
+        ...creditorData,
+        date: new Date().toISOString().split('T')[0],
+        status: 'pending' as const,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
-      setCreditors([...creditors, creditor]);
+      setCreditors(prev => [newCreditorObj, ...prev]);
       setNewCreditor({
         name: '',
         phone: '',
@@ -288,12 +481,6 @@ export function CreditorsManager({
       });
       setIsAddDialogOpen(false);
       toast.success('Creditor added successfully');
-      
-      await api.logUserActivity('creditor_create', undefined, {
-        creditor_id: creditor.id,
-        station_id: creditor.station_id,
-        amount: creditor.amount
-      });
       
     } catch (error) {
       console.error('Error adding creditor:', error);
@@ -309,37 +496,40 @@ export function CreditorsManager({
       return;
     }
 
-    if (!canManageCreditors) {
+    if (!canEditCreditors) {
       toast.error('You do not have permission to edit creditors');
+      return;
+    }
+
+    // Station managers can only edit creditors from their station
+    if (userRole === 'station_manager' && selectedCreditor.station_id !== selectedStation) {
+      toast.error('You can only edit creditors from your assigned station');
       return;
     }
 
     setActionLoading('edit');
     try {
-      const updatedCreditor: Creditor = {
-        ...selectedCreditor,
+      const updatedData = {
         name: editCreditor.name,
         phone: editCreditor.phone,
         vehicle_number: editCreditor.vehicle_number,
         amount: parseFloat(editCreditor.amount),
         due_date: editCreditor.due_date,
         notes: editCreditor.notes,
+        station_id: editCreditor.station_id,
+      };
+
+      // Mock API call - replace with actual API
+      const updatedCreditor: Creditor = {
+        ...selectedCreditor,
+        ...updatedData,
         updated_at: new Date().toISOString(),
       };
 
-      setCreditors(creditors.map(c => c.id === selectedCreditor.id ? updatedCreditor : c));
+      setCreditors(prev => prev.map(c => c.id === selectedCreditor.id ? updatedCreditor : c));
       setIsEditDialogOpen(false);
       setSelectedCreditor(null);
       toast.success('Creditor updated successfully');
-      
-      await api.logUserActivity('creditor_update', undefined, {
-        creditor_id: selectedCreditor.id,
-        station_id: selectedCreditor.station_id,
-        changes: {
-          amount: updatedCreditor.amount,
-          due_date: updatedCreditor.due_date
-        }
-      });
       
     } catch (error) {
       console.error('Error updating creditor:', error);
@@ -359,17 +549,11 @@ export function CreditorsManager({
 
     setActionLoading('delete');
     try {
-      setCreditors(creditors.filter(c => c.id !== selectedCreditor.id));
+      // Mock API call - replace with actual API
+      setCreditors(prev => prev.filter(c => c.id !== selectedCreditor.id));
       setIsDeleteDialogOpen(false);
       setSelectedCreditor(null);
       toast.success('Creditor deleted successfully');
-      
-      await api.logUserActivity('creditor_delete', undefined, {
-        creditor_id: selectedCreditor.id,
-        station_id: selectedCreditor.station_id,
-        creditor_name: selectedCreditor.name,
-        amount: selectedCreditor.amount
-      });
       
     } catch (error) {
       console.error('Error deleting creditor:', error);
@@ -382,32 +566,37 @@ export function CreditorsManager({
   const handleMarkAsPaid = async (receiptPhoto?: string) => {
     if (!selectedCreditor) return;
 
-    if (!canManageCreditors) {
+    if (!canMarkPayments) {
       toast.error('You do not have permission to mark payments');
+      return;
+    }
+
+    // Station managers can only mark payments for their station
+    if (userRole === 'station_manager' && selectedCreditor.station_id !== selectedStation) {
+      toast.error('You can only mark payments for creditors from your assigned station');
       return;
     }
 
     setActionLoading('payment');
     try {
-      const updatedCreditor: Creditor = {
-        ...selectedCreditor,
-        status: 'paid',
+      const paymentData = {
+        status: 'paid' as const,
         payment_date: new Date().toISOString().split('T')[0],
         receipt_photo: receiptPhoto,
+      };
+
+      // Mock API call - replace with actual API
+      const updatedCreditor: Creditor = {
+        ...selectedCreditor,
+        ...paymentData,
         updated_at: new Date().toISOString(),
       };
 
-      setCreditors(creditors.map(c => c.id === selectedCreditor.id ? updatedCreditor : c));
+      setCreditors(prev => prev.map(c => c.id === selectedCreditor.id ? updatedCreditor : c));
       setIsPaymentDialogOpen(false);
       setSelectedCreditor(null);
       toast.success('Payment recorded successfully');
 
-      await api.logUserActivity('creditor_payment', undefined, {
-        creditor_id: selectedCreditor.id,
-        station_id: selectedCreditor.station_id,
-        amount: selectedCreditor.amount
-      });
-      
     } catch (error) {
       console.error('Error recording payment:', error);
       toast.error('Failed to record payment');
@@ -433,6 +622,11 @@ export function CreditorsManager({
   const openDeleteDialog = (creditor: Creditor) => {
     setSelectedCreditor(creditor);
     setIsDeleteDialogOpen(true);
+  };
+
+  const openViewDialog = (creditor: Creditor) => {
+    setSelectedCreditor(creditor);
+    setIsViewDialogOpen(true);
   };
 
   const getStatusColor = (status: string) => {
@@ -509,7 +703,17 @@ export function CreditorsManager({
           <SelectContent>
             {availableStations.map((station) => (
               <SelectItem key={station.id} value={station.id}>
-                {station.name} ({station.code})
+                <div className="flex items-center gap-2">
+                  <Building className="w-4 h-4" />
+                  <span>{station.name}</span>
+                  {station.location && (
+                    <>
+                      <span>•</span>
+                      <MapPin className="w-3 h-3" />
+                      <span className="text-xs text-gray-500">{station.location}</span>
+                    </>
+                  )}
+                </div>
               </SelectItem>
             ))}
           </SelectContent>
@@ -518,13 +722,197 @@ export function CreditorsManager({
     );
   };
 
+  // Render creditor cards
+  const renderCreditorCards = () => (
+    <div className="space-y-4">
+      {filteredCreditors.map((creditor) => (
+        <Card key={creditor.id} className="bg-white rounded-2xl shadow-sm border-0 hover:shadow-md transition-shadow">
+          <CardContent className="pt-6">
+            <div className="flex items-start justify-between">
+              <div className="space-y-2 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-lg text-black">{creditor.name}</h3>
+                  <Badge className={`${getStatusColor(creditor.status)} border`}>
+                    <div className="flex items-center gap-1">
+                      {getStatusIcon(creditor.status)}
+                      {creditor.status.charAt(0).toUpperCase() + creditor.status.slice(1)}
+                    </div>
+                  </Badge>
+                </div>
+                <div className="text-sm text-gray-600 space-y-1">
+                  {canViewAllStations && creditor.station_name && (
+                    <div className="flex items-center gap-2">
+                      <Building className="w-4 h-4" />
+                      <span>{creditor.station_name}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <span>🚗 {creditor.vehicle_number}</span>
+                    <span>•</span>
+                    <span>📞 {creditor.phone}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Sale: {creditor.date}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Due: {creditor.due_date}
+                    </span>
+                  </div>
+                  {creditor.payment_date && (
+                    <div className="flex items-center gap-1 text-green-600">
+                      <CheckCircle className="w-3 h-3" />
+                      Paid On: {creditor.payment_date}
+                    </div>
+                  )}
+                  {creditor.notes && (
+                    <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
+                      📝 {creditor.notes}
+                    </div>
+                  )}
+                  <div className="text-xs text-gray-400">
+                    Updated: {new Date(creditor.updated_at || creditor.created_at || '').toLocaleDateString()}
+                  </div>
+                </div>
+              </div>
+              <div className="text-right space-y-3 ml-4 flex flex-col items-end">
+                <div className="text-2xl font-bold text-black">₵{creditor.amount.toLocaleString()}</div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openViewDialog(creditor)}
+                    className="gap-2"
+                  >
+                    <Eye className="w-4 h-4" />
+                    View
+                  </Button>
+                  
+                  {creditor.status !== 'paid' && canMarkPayments && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setSelectedCreditor(creditor);
+                        setIsPaymentDialogOpen(true);
+                      }}
+                      style={{ backgroundColor: '#0B2265' }}
+                      className="gap-2"
+                      disabled={actionLoading === 'payment'}
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      {actionLoading === 'payment' ? 'Processing...' : 'Mark Paid'}
+                    </Button>
+                  )}
+                  
+                  {(canEditCreditors || canDeleteCreditors) && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <MoreVertical className="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {canEditCreditors && (
+                          <DropdownMenuItem onClick={() => openEditDialog(creditor)}>
+                            <Edit className="w-4 h-4 mr-2" />
+                            Edit Creditor
+                          </DropdownMenuItem>
+                        )}
+                        {canDeleteCreditors && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem 
+                              onClick={() => openDeleteDialog(creditor)}
+                              className="text-red-600"
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete Creditor
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+
+  // Render creditor table
+  const renderCreditorTable = () => (
+    <div className="border rounded-lg">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Customer</TableHead>
+            <TableHead>Vehicle</TableHead>
+            <TableHead>Phone</TableHead>
+            {canViewAllStations && <TableHead>Station</TableHead>}
+            <TableHead>Amount</TableHead>
+            <TableHead>Due Date</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {filteredCreditors.map((creditor) => (
+            <TableRow key={creditor.id}>
+              <TableCell className="font-medium">{creditor.name}</TableCell>
+              <TableCell>{creditor.vehicle_number}</TableCell>
+              <TableCell>{creditor.phone}</TableCell>
+              {canViewAllStations && (
+                <TableCell>{creditor.station_name}</TableCell>
+              )}
+              <TableCell className="font-semibold">₵{creditor.amount.toLocaleString()}</TableCell>
+              <TableCell>{creditor.due_date}</TableCell>
+              <TableCell>
+                <Badge className={`${getStatusColor(creditor.status)} border`}>
+                  {creditor.status}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openViewDialog(creditor)}
+                  >
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                  {creditor.status !== 'paid' && canMarkPayments && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setSelectedCreditor(creditor);
+                        setIsPaymentDialogOpen(true);
+                      }}
+                      style={{ backgroundColor: '#0B2265' }}
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+
   // FIXED: Added Add Button in Compact View
   if (compact) {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h4 className="text-lg text-black">Creditor Management</h4>
-          {canManageCreditors && (
+          {canAddCreditors && (
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button 
@@ -621,7 +1009,7 @@ export function CreditorsManager({
         </div>
 
         {/* Quick Add Form for Compact View */}
-        {canManageCreditors && (
+        {canAddCreditors && (
           <div className="bg-gray-50 p-4 rounded-lg">
             <h5 className="font-medium text-black mb-3">Quick Add Creditor</h5>
             <div className="grid grid-cols-2 gap-3">
@@ -703,14 +1091,12 @@ export function CreditorsManager({
             Refresh
           </Button>
           
-          <Suspense fallback={<Button variant="outline" disabled>Exporting...</Button>}>
-            <LazyExportButton 
-              data={creditors} 
-              filename={`creditors-${selectedStation || 'all'}-${new Date().toISOString().split('T')[0]}`}
-            />
-          </Suspense>
+          <ExportButton 
+            data={creditors} 
+            filename={`creditors-${selectedStation || 'all'}-${new Date().toISOString().split('T')[0]}`}
+          />
 
-          {canManageCreditors && (
+          {canAddCreditors && (
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button style={{ backgroundColor: '#0B2265' }} className="gap-2">
@@ -887,6 +1273,9 @@ export function CreditorsManager({
         </div>
       )}
 
+      {/* Analytics Charts */}
+      <Charts creditors={creditors} />
+
       {/* Actions Bar */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex flex-1 gap-2">
@@ -911,6 +1300,23 @@ export function CreditorsManager({
               <SelectItem value="overdue">Overdue</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        
+        <div className="flex gap-2">
+          <Button
+            variant={viewMode === 'card' ? 'default' : 'outline'}
+            onClick={() => setViewMode('card')}
+            size="sm"
+          >
+            Card View
+          </Button>
+          <Button
+            variant={viewMode === 'table' ? 'default' : 'outline'}
+            onClick={() => setViewMode('table')}
+            size="sm"
+          >
+            Table View
+          </Button>
         </div>
       </div>
 
@@ -938,111 +1344,7 @@ export function CreditorsManager({
             </div>
           ) : (
             <>
-              {filteredCreditors.map((creditor) => (
-                <Card key={creditor.id} className="bg-white rounded-2xl shadow-sm border-0 hover:shadow-md transition-shadow">
-                  <CardContent className="pt-6">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-2 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-lg text-black">{creditor.name}</h3>
-                          <Badge className={`${getStatusColor(creditor.status)} border`}>
-                            <div className="flex items-center gap-1">
-                              {getStatusIcon(creditor.status)}
-                              {creditor.status.charAt(0).toUpperCase() + creditor.status.slice(1)}
-                            </div>
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-gray-600 space-y-1">
-                          {canViewAllStations && creditor.station_name && (
-                            <div className="flex items-center gap-2">
-                              <span>🏪 {creditor.station_name}</span>
-                            </div>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <span>🚗 {creditor.vehicle_number}</span>
-                            <span>•</span>
-                            <span>📞 {creditor.phone}</span>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <span className="flex items-center gap-1">
-                              <Calendar className="w-3 h-3" />
-                              Sale: {creditor.date}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Calendar className="w-3 h-3" />
-                              Due: {creditor.due_date}
-                            </span>
-                          </div>
-                          {creditor.payment_date && (
-                            <div className="flex items-center gap-1 text-green-600">
-                              <CheckCircle className="w-3 h-3" />
-                              Paid On: {creditor.payment_date}
-                            </div>
-                          )}
-                          {creditor.notes && (
-                            <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
-                              📝 {creditor.notes}
-                            </div>
-                          )}
-                          <div className="text-xs text-gray-400">
-                            Updated: {new Date(creditor.updated_at || creditor.created_at || '').toLocaleDateString()}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right space-y-3 ml-4 flex flex-col items-end">
-                        <div className="text-2xl font-bold text-black">₵{creditor.amount.toLocaleString()}</div>
-                        <div className="flex gap-2">
-                          {creditor.status !== 'paid' && canManageCreditors && (
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                setSelectedCreditor(creditor);
-                                setIsPaymentDialogOpen(true);
-                              }}
-                              style={{ backgroundColor: '#0B2265' }}
-                              className="gap-2"
-                              disabled={actionLoading === 'payment'}
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              {actionLoading === 'payment' ? 'Processing...' : 'Mark Paid'}
-                            </Button>
-                          )}
-                          
-                          {(canManageCreditors || canDeleteCreditors) && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="outline" size="sm">
-                                  <MoreVertical className="w-4 h-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {canManageCreditors && (
-                                  <DropdownMenuItem onClick={() => openEditDialog(creditor)}>
-                                    <Edit className="w-4 h-4 mr-2" />
-                                    Edit Creditor
-                                  </DropdownMenuItem>
-                                )}
-                                {canDeleteCreditors && (
-                                  <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem 
-                                      onClick={() => openDeleteDialog(creditor)}
-                                      className="text-red-600"
-                                    >
-                                      <Trash2 className="w-4 h-4 mr-2" />
-                                      Delete Creditor
-                                    </DropdownMenuItem>
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+              {viewMode === 'card' ? renderCreditorCards() : renderCreditorTable()}
 
               {filteredCreditors.length === 0 && (
                 <Card className="bg-white rounded-2xl shadow-sm border-0">
@@ -1060,17 +1362,88 @@ export function CreditorsManager({
         </TabsContent>
 
         <TabsContent value="pending" className="space-y-4">
-          {/* Same structure as "all" but filtered for pending */}
+          {viewMode === 'card' ? renderCreditorCards() : renderCreditorTable()}
         </TabsContent>
         
         <TabsContent value="overdue" className="space-y-4">
-          {/* Same structure as "all" but filtered for overdue */}
+          {viewMode === 'card' ? renderCreditorCards() : renderCreditorTable()}
         </TabsContent>
         
         <TabsContent value="paid" className="space-y-4">
-          {/* Same structure as "all" but filtered for paid */}
+          {viewMode === 'card' ? renderCreditorCards() : renderCreditorTable()}
         </TabsContent>
       </Tabs>
+
+      {/* View Creditor Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Creditor Details</DialogTitle>
+            <DialogDescription>
+              Complete information for {selectedCreditor?.name}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedCreditor && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium">Customer Name</Label>
+                  <p className="text-black">{selectedCreditor.name}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Phone</Label>
+                  <p className="text-black">{selectedCreditor.phone}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Vehicle Number</Label>
+                  <p className="text-black">{selectedCreditor.vehicle_number}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Amount</Label>
+                  <p className="text-black font-semibold">₵{selectedCreditor.amount.toLocaleString()}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Sale Date</Label>
+                  <p className="text-black">{selectedCreditor.date}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Due Date</Label>
+                  <p className="text-black">{selectedCreditor.due_date}</p>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Status</Label>
+                  <Badge className={`${getStatusColor(selectedCreditor.status)} border`}>
+                    {selectedCreditor.status}
+                  </Badge>
+                </div>
+                {selectedCreditor.payment_date && (
+                  <div>
+                    <Label className="text-sm font-medium">Payment Date</Label>
+                    <p className="text-black">{selectedCreditor.payment_date}</p>
+                  </div>
+                )}
+              </div>
+              {selectedCreditor.notes && (
+                <div>
+                  <Label className="text-sm font-medium">Notes</Label>
+                  <p className="text-black bg-gray-50 p-3 rounded-lg">{selectedCreditor.notes}</p>
+                </div>
+              )}
+              {canViewAllStations && selectedCreditor.station_name && (
+                <div>
+                  <Label className="text-sm font-medium">Station</Label>
+                  <p className="text-black">{selectedCreditor.station_name}</p>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Creditor Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>

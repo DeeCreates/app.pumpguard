@@ -30,6 +30,9 @@ import {
   Trash2,
   Calendar,
   RefreshCw,
+  Mail,
+  Phone,
+  ChevronRight,
 } from "lucide-react";
 import {
   Dialog,
@@ -175,11 +178,25 @@ interface SalesSummary {
   }>;
 }
 
+// Custom Separator Component
+const Separator = ({ className = "" }: { className?: string }) => (
+  <div className={`h-px bg-gray-200 ${className}`} />
+);
+
+// Section Header Component
+const SectionHeader = ({ title, icon }: { title: string; icon?: React.ReactNode }) => (
+  <div className="flex items-center gap-3 mb-4">
+    {icon && <div className="text-gray-500">{icon}</div>}
+    <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <div className="flex-1 h-px bg-gray-200" />
+  </div>
+);
+
 // Enhanced Chart Component with Real Data
 const SalesChart = ({ data, loading }: { data: SalesSummary['daily_trends']; loading: boolean }) => {
   if (loading) {
     return (
-      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
+      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-2xl">
         <div className="text-center">
           <Loader2 className="w-8 h-8 text-gray-400 mx-auto mb-2 animate-spin" />
           <p className="text-gray-500">Loading chart data...</p>
@@ -190,7 +207,7 @@ const SalesChart = ({ data, loading }: { data: SalesSummary['daily_trends']; loa
 
   if (!data || data.length === 0) {
     return (
-      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-lg">
+      <div className="h-64 flex items-center justify-center bg-gray-50 rounded-2xl">
         <div className="text-center">
           <BarChart3 className="w-12 h-12 text-gray-400 mx-auto mb-2" />
           <p className="text-gray-500">No sales data available</p>
@@ -203,40 +220,40 @@ const SalesChart = ({ data, loading }: { data: SalesSummary['daily_trends']; loa
   const maxVolume = Math.max(...data.map(item => item.volume));
 
   return (
-    <div className="h-64 bg-white rounded-lg p-4">
-      <div className="flex items-center justify-between mb-4">
+    <div className="h-64 bg-white rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-6">
         <h4 className="text-sm font-semibold text-gray-700">Daily Sales Trend</h4>
         <div className="flex gap-4 text-xs">
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-blue-500 rounded"></div>
-            <span>Sales (₵)</span>
+            <span className="text-gray-600">Sales (₵)</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-green-500 rounded"></div>
-            <span>Volume (L)</span>
+            <span className="text-gray-600">Volume (L)</span>
           </div>
         </div>
       </div>
       
-      <div className="flex items-end justify-between h-48 gap-1">
+      <div className="flex items-end justify-between h-40 gap-1">
         {data.map((day, index) => (
-          <div key={index} className="flex flex-col items-center flex-1">
+          <div key={index} className="flex flex-col items-center flex-1 group">
             <div className="flex items-end justify-center gap-1 w-full" style={{ height: '120px' }}>
               {/* Sales Bar */}
               <div
-                className="w-3 bg-blue-500 rounded-t transition-all duration-300 hover:bg-blue-600"
+                className="w-3 bg-blue-500 rounded-t transition-all duration-300 hover:bg-blue-600 group-hover:shadow-lg"
                 style={{ height: `${(day.sales / maxSales) * 100}%` }}
                 title={`₵${day.sales.toLocaleString()}`}
               />
               {/* Volume Bar */}
               <div
-                className="w-3 bg-green-500 rounded-t transition-all duration-300 hover:bg-green-600"
+                className="w-3 bg-green-500 rounded-t transition-all duration-300 hover:bg-green-600 group-hover:shadow-lg"
                 style={{ height: `${(day.volume / maxVolume) * 80}%` }}
                 title={`${day.volume.toLocaleString()}L`}
               />
             </div>
-            <div className="text-xs text-gray-500 mt-2 rotate-45 origin-top-left whitespace-nowrap">
-              {new Date(day.date).getDate()}/{new Date(day.date).getMonth() + 1}
+            <div className="text-xs text-gray-500 mt-2 whitespace-nowrap">
+              {new Date(day.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
             </div>
           </div>
         ))}
@@ -608,8 +625,8 @@ export function OMCDashboard() {
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-8 gap-4">
-          <div>
-            <h1 className="text-3xl lg:text-4xl text-black mb-2">OMC Dashboard</h1>
+          <div className="space-y-2">
+            <h1 className="text-3xl lg:text-4xl text-black font-bold">OMC Dashboard</h1>
             <p className="text-gray-600">
               {user?.full_name || user?.email} - Multi-Station Network Management & Brand Oversight
             </p>
@@ -617,56 +634,67 @@ export function OMCDashboard() {
           <div className="flex items-center gap-2 flex-wrap">
             <Dialog open={showStationDialog} onOpenChange={setShowStationDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" className="bg-blue-900 hover:bg-blue-800">
-                  <Plus className="w-4 h-4 mr-2" />
+                <Button size="sm" className="bg-blue-900 hover:bg-blue-800 gap-2">
+                  <Plus className="w-4 h-4" />
                   New Station
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-md sm:max-w-lg mx-2 sm:mx-auto">
                 <DialogHeader>
-                  <DialogTitle>Create Station</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Building2 className="w-5 h-5" />
+                    Create Station
+                  </DialogTitle>
                   <DialogDescription>
                     Add a new fuel station to your OMC network
                   </DialogDescription>
                 </DialogHeader>
+                
+                <Separator />
+                
                 <form onSubmit={handleCreateStation} className="space-y-4">
-                  <div>
-                    <Label>Station Name *</Label>
+                  <div className="space-y-2">
+                    <Label>Station Name</Label>
                     <Input
                       value={stationForm.name}
                       onChange={(e) => setStationForm({ ...stationForm, name: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+                    <div className="space-y-2">
                       <Label>City</Label>
                       <Input
                         value={stationForm.city}
                         onChange={(e) => setStationForm({ ...stationForm, city: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <Label>Region</Label>
                       <Input
                         value={stationForm.region}
                         onChange={(e) => setStationForm({ ...stationForm, region: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Address</Label>
                     <Input
                       value={stationForm.address}
                       onChange={(e) => setStationForm({ ...stationForm, address: e.target.value })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Code</Label>
                     <Input
                       value={stationForm.code}
                       onChange={(e) => setStationForm({ ...stationForm, code: e.target.value })}
                       placeholder="Auto-generated if empty"
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
                   <Button 
@@ -689,61 +717,71 @@ export function OMCDashboard() {
 
             <Dialog open={showUserDialog} onOpenChange={setShowUserDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" className="bg-blue-900 hover:bg-blue-800">
-                  <UserPlus className="w-4 h-4 mr-2" />
+                <Button size="sm" className="bg-blue-900 hover:bg-blue-800 gap-2">
+                  <UserPlus className="w-4 h-4" />
                   New User
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-md sm:max-w-lg mx-2 sm:mx-auto">
                 <DialogHeader>
-                  <DialogTitle>Create User Account</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2">
+                    <UserPlus className="w-5 h-5" />
+                    Create User Account
+                  </DialogTitle>
                   <DialogDescription>
                     Create system users with role-based permissions for your OMC network
                   </DialogDescription>
                 </DialogHeader>
+                
+                <Separator />
+                
                 <form onSubmit={handleCreateUser} className="space-y-4">
-                  <div>
-                    <Label>Full Name *</Label>
+                  <div className="space-y-2">
+                    <Label>Full Name</Label>
                     <Input
                       value={userForm.full_name}
                       onChange={(e) => setUserForm({ ...userForm, full_name: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <Label>Email *</Label>
+                  <div className="space-y-2">
+                    <Label>Email Address</Label>
                     <Input
                       type="email"
                       value={userForm.email}
                       onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <Label>Password *</Label>
+                  <div className="space-y-2">
+                    <Label>Password</Label>
                     <Input
                       type="password"
                       value={userForm.password}
                       onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
                       required
                       minLength={6}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <Label>Phone</Label>
+                  <div className="space-y-2">
+                    <Label>Phone Number</Label>
                     <Input
                       type="tel"
                       value={userForm.phone}
                       onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <Label>Role *</Label>
+                  <div className="space-y-2">
+                    <Label>User Role</Label>
                     <Select 
                       value={userForm.role} 
                       onValueChange={(value: any) => setUserForm({ ...userForm, role: value })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="bg-gray-50 border-gray-200">
                         <SelectValue placeholder="Select Role" />
                       </SelectTrigger>
                       <SelectContent>
@@ -763,13 +801,13 @@ export function OMCDashboard() {
                   </div>
 
                   {shouldShowStationField() && (
-                    <div>
-                      <Label>Station *</Label>
+                    <div className="space-y-2">
+                      <Label>Station Assignment</Label>
                       <Select 
                         value={userForm.station_id} 
                         onValueChange={(value) => setUserForm({ ...userForm, station_id: value })}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="bg-gray-50 border-gray-200">
                           <SelectValue placeholder="Select Station" />
                         </SelectTrigger>
                         <SelectContent>
@@ -789,13 +827,13 @@ export function OMCDashboard() {
                   )}
 
                   {shouldShowDealerField() && (
-                    <div>
-                      <Label>Dealer</Label>
+                    <div className="space-y-2">
+                      <Label>Dealer Association</Label>
                       <Select 
                         value={userForm.dealer_id} 
                         onValueChange={(value) => setUserForm({ ...userForm, dealer_id: value })}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="bg-gray-50 border-gray-200">
                           <SelectValue placeholder="Select Dealer (Optional)" />
                         </SelectTrigger>
                         <SelectContent>
@@ -834,76 +872,89 @@ export function OMCDashboard() {
 
             <Dialog open={showDealerDialog} onOpenChange={setShowDealerDialog}>
               <DialogTrigger asChild>
-                <Button size="sm" className="bg-blue-900 hover:bg-blue-800">
-                  <Users className="w-4 h-4 mr-2" />
+                <Button size="sm" className="bg-blue-900 hover:bg-blue-800 gap-2">
+                  <Users className="w-4 h-4" />
                   New Dealer
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-md sm:max-w-lg mx-2 sm:mx-auto">
                 <DialogHeader>
-                  <DialogTitle>Create Dealer</DialogTitle>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Users className="w-5 h-5" />
+                    Create Dealer
+                  </DialogTitle>
                   <DialogDescription>
                     Add a new dealer to your OMC network
                   </DialogDescription>
                 </DialogHeader>
+                
+                <Separator />
+                
                 <form onSubmit={handleCreateDealer} className="space-y-4">
-                  <div>
-                    <Label>Dealer Name *</Label>
+                  <div className="space-y-2">
+                    <Label>Dealer Name</Label>
                     <Input
                       value={dealerForm.name}
                       onChange={(e) => setDealerForm({ ...dealerForm, name: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Contact Person</Label>
                     <Input
                       value={dealerForm.contact_person}
                       onChange={(e) => setDealerForm({ ...dealerForm, contact_person: e.target.value })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label>Email</Label>
+                    <div className="space-y-2">
+                      <Label>Email Address</Label>
                       <Input
                         type="email"
                         value={dealerForm.email}
                         onChange={(e) => setDealerForm({ ...dealerForm, email: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
-                    <div>
-                      <Label>Phone</Label>
+                    <div className="space-y-2">
+                      <Label>Phone Number</Label>
                       <Input
                         type="tel"
                         value={dealerForm.phone}
                         onChange={(e) => setDealerForm({ ...dealerForm, phone: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
+                    <div className="space-y-2">
                       <Label>City</Label>
                       <Input
                         value={dealerForm.city}
                         onChange={(e) => setDealerForm({ ...dealerForm, city: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
-                    <div>
+                    <div className="space-y-2">
                       <Label>Region</Label>
                       <Input
                         value={dealerForm.region}
                         onChange={(e) => setDealerForm({ ...dealerForm, region: e.target.value })}
+                        className="bg-gray-50 border-gray-200"
                       />
                     </div>
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Address</Label>
                     <Input
                       value={dealerForm.address}
                       onChange={(e) => setDealerForm({ ...dealerForm, address: e.target.value })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
+                  <div className="space-y-2">
                     <Label>Commission Rate (%)</Label>
                     <Input
                       type="number"
@@ -912,6 +963,7 @@ export function OMCDashboard() {
                       max="100"
                       value={dealerForm.commission_rate * 100}
                       onChange={(e) => setDealerForm({ ...dealerForm, commission_rate: parseFloat(e.target.value) / 100 })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
                   <Button 
@@ -936,7 +988,7 @@ export function OMCDashboard() {
               variant="outline" 
               onClick={refreshData}
               disabled={loading || refreshing}
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 border-gray-300"
             >
               {refreshing ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -957,7 +1009,7 @@ export function OMCDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-600 text-sm mb-1">Active Stations</p>
-                  <p className="text-3xl text-black">{stats?.active_stations || 0}</p>
+                  <p className="text-3xl text-black font-bold">{stats?.active_stations || 0}</p>
                   <p className="text-sm text-green-600">
                     of {stats?.total_stations || 0} total
                   </p>
@@ -972,7 +1024,7 @@ export function OMCDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-600 text-sm mb-1">Total Sales</p>
-                  <p className="text-3xl text-black">₵{(stats?.total_sales || 0).toLocaleString()}</p>
+                  <p className="text-3xl text-black font-bold">₵{(stats?.total_sales || 0).toLocaleString()}</p>
                   <p className={`text-sm ${(stats?.monthly_growth || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {stats?.monthly_growth ? `${stats.monthly_growth > 0 ? '+' : ''}${stats.monthly_growth.toFixed(1)}%` : 'No data'}
                   </p>
@@ -987,7 +1039,7 @@ export function OMCDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-600 text-sm mb-1">Volume Sold</p>
-                  <p className="text-3xl text-black">{(stats?.total_volume || 0).toLocaleString()}L</p>
+                  <p className="text-3xl text-black font-bold">{(stats?.total_volume || 0).toLocaleString()}L</p>
                   <p className="text-sm text-gray-600">
                     {stats?.total_transactions || 0} transactions
                   </p>
@@ -1002,7 +1054,7 @@ export function OMCDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-600 text-sm mb-1">Network Health</p>
-                  <p className="text-3xl text-black">{stats?.avg_compliance || 0}%</p>
+                  <p className="text-3xl text-black font-bold">{stats?.avg_compliance || 0}%</p>
                   <p className="text-sm text-gray-600">
                     {stats?.pending_violations || 0} pending issues
                   </p>
@@ -1017,24 +1069,24 @@ export function OMCDashboard() {
 
         {/* Enhanced Navigation Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-white p-1 rounded-xl w-full grid grid-cols-5">
-            <TabsTrigger value="overview" className="flex items-center gap-2">
+          <TabsList className="bg-white p-1 rounded-2xl w-full grid grid-cols-5 border border-gray-200">
+            <TabsTrigger value="overview" className="flex items-center gap-2 data-[state=active]:bg-blue-900 data-[state=active]:text-white">
               <BarChart3 className="w-4 h-4" />
               <span className="hidden sm:inline">Overview</span>
             </TabsTrigger>
-            <TabsTrigger value="stations" className="flex items-center gap-2">
+            <TabsTrigger value="stations" className="flex items-center gap-2 data-[state=active]:bg-blue-900 data-[state=active]:text-white">
               <Building2 className="w-4 h-4" />
               <span className="hidden sm:inline">Stations</span>
             </TabsTrigger>
-            <TabsTrigger value="users" className="flex items-center gap-2">
+            <TabsTrigger value="users" className="flex items-center gap-2 data-[state=active]:bg-blue-900 data-[state=active]:text-white">
               <Users className="w-4 h-4" />
               <span className="hidden sm:inline">Users</span>
             </TabsTrigger>
-            <TabsTrigger value="dealers" className="flex items-center gap-2">
+            <TabsTrigger value="dealers" className="flex items-center gap-2 data-[state=active]:bg-blue-900 data-[state=active]:text-white">
               <UserPlus className="w-4 h-4" />
               <span className="hidden sm:inline">Dealers</span>
             </TabsTrigger>
-            <TabsTrigger value="reports" className="flex items-center gap-2">
+            <TabsTrigger value="reports" className="flex items-center gap-2 data-[state=active]:bg-blue-900 data-[state=active]:text-white">
               <FileText className="w-4 h-4" />
               <span className="hidden sm:inline">Reports</span>
             </TabsTrigger>
@@ -1044,7 +1096,10 @@ export function OMCDashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
                 <CardHeader>
-                  <CardTitle>Sales Performance</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5 text-gray-600" />
+                    Sales Performance
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <SalesChart 
@@ -1056,25 +1111,28 @@ export function OMCDashboard() {
 
               <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
                 <CardHeader>
-                  <CardTitle>Network Performance</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-gray-600" />
+                    Network Performance
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center p-4 bg-blue-50 rounded-xl">
+                    <div className="flex justify-between items-center p-4 bg-blue-50 rounded-xl border border-blue-100">
                       <span className="text-gray-600">Station Utilization</span>
                       <span className="text-black font-semibold">
                         {stats ? Math.round((stats.active_stations / stats.total_stations) * 100) : 0}%
                       </span>
                     </div>
-                    <div className="flex justify-between items-center p-4 bg-green-50 rounded-xl">
+                    <div className="flex justify-between items-center p-4 bg-green-50 rounded-xl border border-green-100">
                       <span className="text-gray-600">Active Dealers</span>
                       <span className="text-black font-semibold">{stats?.active_dealers || 0}</span>
                     </div>
-                    <div className="flex justify-between items-center p-4 bg-orange-50 rounded-xl">
+                    <div className="flex justify-between items-center p-4 bg-orange-50 rounded-xl border border-orange-100">
                       <span className="text-gray-600">Network Users</span>
                       <span className="text-black font-semibold">{stats?.total_users || 0}</span>
                     </div>
-                    <div className="flex justify-between items-center p-4 bg-red-50 rounded-xl">
+                    <div className="flex justify-between items-center p-4 bg-red-50 rounded-xl border border-red-100">
                       <span className="text-gray-600">Pending Issues</span>
                       <span className="text-black font-semibold">{stats?.pending_violations || 0}</span>
                     </div>
@@ -1086,7 +1144,10 @@ export function OMCDashboard() {
             {/* Quick Network Insights */}
             <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
               <CardHeader>
-                <CardTitle>Network Intelligence</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-gray-600" />
+                  Network Intelligence
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 {loading ? (
@@ -1103,7 +1164,7 @@ export function OMCDashboard() {
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {stations.length > 0 && salesSummary?.top_stations?.[0] && (
-                      <div className="text-center p-4 bg-green-50 rounded-xl">
+                      <div className="text-center p-4 bg-green-50 rounded-xl border border-green-100">
                         <TrendingUp className="w-8 h-8 text-green-600 mx-auto mb-2" />
                         <p className="text-sm text-gray-600">Top Performing Station</p>
                         <p className="text-lg text-black font-semibold truncate">
@@ -1115,10 +1176,10 @@ export function OMCDashboard() {
                       </div>
                     )}
                     {stations.length > 0 && (
-                      <div className="text-center p-4 bg-orange-50 rounded-xl">
+                      <div className="text-center p-4 bg-orange-50 rounded-xl border border-orange-100">
                         <AlertTriangle className="w-8 h-8 text-orange-600 mx-auto mb-2" />
                         <p className="text-sm text-gray-600">Needs Attention</p>
-                        <p className="text-lg text-black font-semibold">
+                        <p className="text-lg text-black font-semibold truncate">
                           {stations.filter(s => s.status !== 'active').length > 0 
                             ? stations.find(s => s.status !== 'active')?.name
                             : 'All stations active'
@@ -1129,7 +1190,7 @@ export function OMCDashboard() {
                         </p>
                       </div>
                     )}
-                    <div className="text-center p-4 bg-blue-50 rounded-xl">
+                    <div className="text-center p-4 bg-blue-50 rounded-xl border border-blue-100">
                       <Settings className="w-8 h-8 text-blue-600 mx-auto mb-2" />
                       <p className="text-sm text-gray-600">Network Health</p>
                       <p className="text-lg text-black font-semibold">
@@ -1147,13 +1208,16 @@ export function OMCDashboard() {
             <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                  <span>Station Network Management</span>
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-gray-600" />
+                    <span>Station Network Management</span>
+                  </div>
                   <Button 
                     size="sm" 
                     onClick={() => setShowStationDialog(true)}
-                    className="bg-blue-900 hover:bg-blue-800"
+                    className="bg-blue-900 hover:bg-blue-800 gap-2"
                   >
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="w-4 h-4" />
                     Add Station
                   </Button>
                 </CardTitle>
@@ -1176,7 +1240,7 @@ export function OMCDashboard() {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div>
-                            <h4 className="text-lg text-black mb-1">{station.name}</h4>
+                            <h4 className="text-lg text-black font-semibold mb-1">{station.name}</h4>
                             <div className="flex items-center gap-1 text-sm text-gray-600">
                               <MapPin className="w-4 h-4" />
                               <span>{station.location || station.address || 'Location not specified'}</span>
@@ -1228,9 +1292,9 @@ export function OMCDashboard() {
                       <p className="text-gray-600">No stations are currently assigned to your OMC.</p>
                       <Button 
                         onClick={() => setShowStationDialog(true)}
-                        className="mt-4 bg-blue-900 hover:bg-blue-800"
+                        className="mt-4 bg-blue-900 hover:bg-blue-800 gap-2"
                       >
-                        <Plus className="w-4 h-4 mr-2" />
+                        <Plus className="w-4 h-4" />
                         Create Your First Station
                       </Button>
                     </div>
@@ -1244,13 +1308,16 @@ export function OMCDashboard() {
             <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
-                  <span>User Management</span>
+                  <div className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-gray-600" />
+                    <span>User Management</span>
+                  </div>
                   <Button 
                     size="sm" 
                     onClick={() => setShowUserDialog(true)}
-                    className="bg-blue-900 hover:bg-blue-800"
+                    className="bg-blue-900 hover:bg-blue-800 gap-2"
                   >
-                    <UserPlus className="w-4 h-4 mr-2" />
+                    <UserPlus className="w-4 h-4" />
                     Add User
                   </Button>
                 </CardTitle>
@@ -1281,15 +1348,28 @@ export function OMCDashboard() {
                 ) : omcUsers.length > 0 ? (
                   <div className="space-y-4">
                     {omcUsers.map((userData) => (
-                      <div key={userData.id} className="p-5 bg-gray-50 rounded-2xl">
+                      <div key={userData.id} className="p-5 bg-gray-50 rounded-2xl hover:shadow-sm transition-all duration-300">
                         <div className="flex items-center justify-between mb-3">
                           <div>
-                            <h4 className="text-lg text-black mb-1">{userData.full_name}</h4>
-                            <p className="text-sm text-gray-600">
-                              {userData.email} • {userData.role.replace('_', ' ')}
-                              {userData.stations?.name && ` • ${userData.stations.name}`}
-                              {userData.dealers?.name && ` • ${userData.dealers.name}`}
-                            </p>
+                            <h4 className="text-lg text-black font-semibold mb-1">{userData.full_name}</h4>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Mail className="w-4 h-4" />
+                              <span>{userData.email}</span>
+                              <span>•</span>
+                              <span className="capitalize">{userData.role.replace('_', ' ')}</span>
+                              {userData.stations?.name && (
+                                <>
+                                  <span>•</span>
+                                  <span>{userData.stations.name}</span>
+                                </>
+                              )}
+                              {userData.dealers?.name && (
+                                <>
+                                  <span>•</span>
+                                  <span>{userData.dealers.name}</span>
+                                </>
+                              )}
+                            </div>
                           </div>
                           <Badge variant={userData.status === 'active' ? 'default' : 'outline'}>
                             {userData.status}
@@ -1307,7 +1387,7 @@ export function OMCDashboard() {
                             <Button 
                               variant="outline" 
                               size="sm" 
-                              className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                               onClick={() => handleDeleteUser(userData.id)}
                             >
                               <Trash2 className="w-3 h-3" />
@@ -1324,9 +1404,9 @@ export function OMCDashboard() {
                     <p className="text-gray-600">No users are currently assigned to your OMC.</p>
                     <Button 
                       onClick={() => setShowUserDialog(true)}
-                      className="mt-4 bg-blue-900 hover:bg-blue-800"
+                      className="mt-4 bg-blue-900 hover:bg-blue-800 gap-2"
                     >
-                      <UserPlus className="w-4 h-4 mr-2" />
+                      <UserPlus className="w-4 h-4" />
                       Create Your First User
                     </Button>
                   </div>
@@ -1335,133 +1415,160 @@ export function OMCDashboard() {
             </Card>
           </TabsContent>
 
-<TabsContent value="dealers">
-  <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
-    <CardHeader>
-      <CardTitle className="flex items-center justify-between">
-        <span>Dealer Network Management</span>
-        <Button 
-          size="sm" 
-          onClick={() => setShowDealerDialog(true)}
-          className="bg-blue-900 hover:bg-blue-800"
-        >
-          <Users className="w-4 h-4 mr-2" />
-          Add Dealer
-        </Button>
-      </CardTitle>
-      <p className="text-sm text-gray-600">
-        Monitor dealer performance and commission structures
-      </p>
-    </CardHeader> {/* This closing tag was missing */}
-    <CardContent>
-      {loading ? (
-        <div className="space-y-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="p-5 bg-gray-50 rounded-2xl">
-              <div className="flex items-center justify-between mb-3">
-                <div className="space-y-2">
-                  <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-4 w-24" />
-                </div>
-                <Skeleton className="h-6 w-16" />
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                <Skeleton className="h-12 rounded-lg" />
-                <Skeleton className="h-12 rounded-lg" />
-                <Skeleton className="h-12 rounded-lg" />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : dealers.length > 0 ? (
-        <div className="space-y-4">
-          {dealers.map((dealer) => (
-            <div key={dealer.id} className="p-5 bg-gray-50 rounded-2xl">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="text-lg text-black mb-1">{dealer.name}</h4>
-                  <p className="text-sm text-gray-600">
-                    {dealer.contact_person && `${dealer.contact_person} • `}
-                    {dealer.email} • {dealer.phone}
-                  </p>
-                </div>
-                <Badge variant={dealer.is_active ? 'default' : 'outline'}>
-                  {dealer.is_active ? 'Active' : 'Inactive'}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-gray-600">
-                  Commission: {(dealer.commission_rate || 0) * 100}% • 
-                  {dealer.region && ` ${dealer.region} •`}
-                  Created: {new Date(dealer.created_at).toLocaleDateString()}
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="h-8 w-8 p-0">
-                    <Eye className="w-3 h-3" />
-                  </Button>
+          <TabsContent value="dealers">
+            <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="w-5 h-5 text-gray-600" />
+                    <span>Dealer Network Management</span>
+                  </div>
                   <Button 
-                    variant="outline" 
                     size="sm" 
-                    className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                    onClick={() => setShowDealerDialog(true)}
+                    className="bg-blue-900 hover:bg-blue-800 gap-2"
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <Users className="w-4 h-4" />
+                    Add Dealer
                   </Button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="text-center py-8">
-          <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No Dealers Found</h3>
-          <p className="text-gray-600">No dealers are currently assigned to your OMC.</p>
-          <Button 
-            onClick={() => setShowDealerDialog(true)}
-            className="mt-4 bg-blue-900 hover:bg-blue-800"
-          >
-            <Users className="w-4 h-4 mr-2" />
-            Create Your First Dealer
-          </Button>
-        </div>
-      )}
-    </CardContent>
-  </Card>
-</TabsContent>         
+                </CardTitle>
+                <p className="text-sm text-gray-600">
+                  Monitor dealer performance and commission structures
+                </p>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="space-y-4">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <div key={i} className="p-5 bg-gray-50 rounded-2xl">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="space-y-2">
+                            <Skeleton className="h-5 w-32" />
+                            <Skeleton className="h-4 w-24" />
+                          </div>
+                          <Skeleton className="h-6 w-16" />
+                        </div>
+                        <div className="grid grid-cols-3 gap-4">
+                          <Skeleton className="h-12 rounded-lg" />
+                          <Skeleton className="h-12 rounded-lg" />
+                          <Skeleton className="h-12 rounded-lg" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : dealers.length > 0 ? (
+                  <div className="space-y-4">
+                    {dealers.map((dealer) => (
+                      <div key={dealer.id} className="p-5 bg-gray-50 rounded-2xl hover:shadow-sm transition-all duration-300">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-lg text-black font-semibold mb-1">{dealer.name}</h4>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              {dealer.contact_person && (
+                                <>
+                                  <span>{dealer.contact_person}</span>
+                                  <span>•</span>
+                                </>
+                              )}
+                              {dealer.email && (
+                                <>
+                                  <Mail className="w-4 h-4" />
+                                  <span>{dealer.email}</span>
+                                  <span>•</span>
+                                </>
+                              )}
+                              {dealer.phone && (
+                                <>
+                                  <Phone className="w-4 h-4" />
+                                  <span>{dealer.phone}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <Badge variant={dealer.is_active ? 'default' : 'outline'}>
+                            {dealer.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-sm text-gray-600">
+                            Commission: {(dealer.commission_rate || 0) * 100}% • 
+                            {dealer.region && ` ${dealer.region} •`}
+                            Created: {new Date(dealer.created_at).toLocaleDateString()}
+                          </div>
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" className="h-8 w-8 p-0">
+                              <Eye className="w-3 h-3" />
+                            </Button>
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">No Dealers Found</h3>
+                    <p className="text-gray-600">No dealers are currently assigned to your OMC.</p>
+                    <Button 
+                      onClick={() => setShowDealerDialog(true)}
+                      className="mt-4 bg-blue-900 hover:bg-blue-800 gap-2"
+                    >
+                      <Users className="w-4 h-4" />
+                      Create Your First Dealer
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="reports">
             <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
               <CardHeader>
-                <CardTitle>Business Intelligence Reports</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-gray-600" />
+                  Business Intelligence Reports
+                </CardTitle>
                 <p className="text-sm text-gray-600">
                   Export comprehensive reports for analysis and decision making
                 </p>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Button variant="outline" className="h-20 justify-start p-4">
+                  <Button variant="outline" className="h-20 justify-start p-4 hover:bg-gray-50">
                     <div className="text-left">
                       <p className="text-black font-semibold">Monthly Financial Report</p>
                       <p className="text-sm text-gray-600">Sales, expenses, and profit analysis</p>
                     </div>
+                    <ChevronRight className="w-4 h-4 ml-auto text-gray-400" />
                   </Button>
-                  <Button variant="outline" className="h-20 justify-start p-4">
+                  <Button variant="outline" className="h-20 justify-start p-4 hover:bg-gray-50">
                     <div className="text-left">
                       <p className="text-black font-semibold">Station Performance Report</p>
                       <p className="text-sm text-gray-600">Comparative analysis across network</p>
                     </div>
+                    <ChevronRight className="w-4 h-4 ml-auto text-gray-400" />
                   </Button>
-                  <Button variant="outline" className="h-20 justify-start p-4">
+                  <Button variant="outline" className="h-20 justify-start p-4 hover:bg-gray-50">
                     <div className="text-left">
                       <p className="text-black font-semibold">Inventory Intelligence</p>
                       <p className="text-sm text-gray-600">Stock levels and demand forecasting</p>
                     </div>
+                    <ChevronRight className="w-4 h-4 ml-auto text-gray-400" />
                   </Button>
-                  <Button variant="outline" className="h-20 justify-start p-4">
+                  <Button variant="outline" className="h-20 justify-start p-4 hover:bg-gray-50">
                     <div className="text-left">
                       <p className="text-black font-semibold">Dealer Commission Report</p>
                       <p className="text-sm text-gray-600">Earnings breakdown and payout status</p>
                     </div>
+                    <ChevronRight className="w-4 h-4 ml-auto text-gray-400" />
                   </Button>
                 </div>
               </CardContent>

@@ -1,12 +1,12 @@
 // src/pages/mobile/MobileStationManagerDashboard.tsx
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, lazy, Suspense, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePrices } from "../../contexts/PriceContext";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -14,8 +14,22 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogDescription,
+  DialogFooter,
 } from "../../components/ui/dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../../components/ui/tabs";
 import { Skeleton } from "../../components/ui/skeleton";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "../../components/ui/sheet";
 import { toast } from "sonner";
 import {
   DollarSign,
@@ -23,8 +37,10 @@ import {
   Package,
   Users,
   Plus,
+  Download,
   Wifi,
   WifiOff,
+  Building2,
   Fuel,
   AlertTriangle,
   RefreshCw,
@@ -34,16 +50,51 @@ import {
   Upload,
   Calendar,
   Clock,
-  Receipt,
-  ChevronRight,
+  User,
   Phone,
   Mail,
   MapPin,
+  Receipt,
+  Eye,
+  Edit,
+  Trash2,
   CheckCircle,
   XCircle,
+  Gauge,
+  Database,
+  BanknoteIcon,
+  Search,
+  Filter,
+  MoreHorizontal,
+  Menu,
+  Home,
+  Bell,
+  ChevronRight,
+  ChevronDown,
+  TrendingDown,
+  Zap,
+  Shield,
+  Cloud,
+  CloudOff,
+  History,
+  BarChart,
+  Wallet,
+  ShoppingCart,
+  ClipboardList,
+  CheckSquare,
+  X,
+  Maximize2,
+  Minimize2,
+  Smartphone,
+  Battery,
+  BatteryCharging,
 } from "lucide-react";
 import { offlineSync } from "../../utils/offline-sync";
 
+// Lazy loaded components for mobile
+const LazyMobileBankDeposits = lazy(() => import('./MobileBankDeposits'));
+
+// Types (simplified for mobile)
 interface DailyReport {
   total_sales: number;
   total_expenses: number;
@@ -53,6 +104,7 @@ interface DailyReport {
   active_shifts: number;
   fuel_stock: number;
   pump_prices: any[];
+  current_stock: any[];
 }
 
 interface PumpPrice {
@@ -72,11 +124,7 @@ interface Expense {
   type: string;
   status: 'pending' | 'approved' | 'rejected';
   created_by: string;
-  approved_by?: string;
   created_at: string;
-  updated_at: string;
-  receipt_url?: string;
-  notes?: string;
 }
 
 interface Product {
@@ -85,183 +133,336 @@ interface Product {
   unit: string;
 }
 
-// Mobile-optimized components
-const MobileStatsGrid = ({ 
-  todaySales, 
-  totalExpenses, 
-  fuelStock, 
-  activeShifts 
-}: { 
-  todaySales: number;
-  totalExpenses: number;
-  fuelStock: number;
-  activeShifts: number;
-}) => {
-  const stats = [
-    {
-      label: "Today's Sales",
-      value: `₵${todaySales.toLocaleString()}`,
-      icon: DollarSign,
-      color: "text-green-600",
-      bgColor: "bg-green-50"
-    },
-    {
-      label: "Expenses",
-      value: `₵${totalExpenses.toLocaleString()}`,
-      icon: TrendingUp,
-      color: "text-red-600",
-      bgColor: "bg-red-50"
-    },
-    {
-      label: "Fuel Stock",
-      value: `${Math.round(fuelStock).toLocaleString()}L`,
-      icon: Fuel,
-      color: "text-blue-600",
-      bgColor: "bg-blue-50"
-    },
-    {
-      label: "Active Shifts",
-      value: `${activeShifts}`,
-      icon: Users,
-      color: "text-purple-600",
-      bgColor: "bg-purple-50"
-    },
-  ];
+interface Pump {
+  id: string;
+  station_id: string;
+  name: string;
+  number: string;
+  fuel_type: string;
+  status: 'active' | 'inactive' | 'maintenance';
+  current_meter_reading: number;
+}
 
-  return (
-    <div className="grid grid-cols-2 gap-3 mb-4">
-      {stats.map((stat, index) => {
-        const IconComponent = stat.icon;
-        return (
-          <div key={index} className={`p-3 rounded-xl ${stat.bgColor} border-0`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-gray-600 mb-1">{stat.label}</p>
-                <p className="text-sm font-bold text-gray-900">{stat.value}</p>
-              </div>
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-white">
-                <IconComponent className={`w-4 h-4 ${stat.color}`} />
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+interface FuelStockCard {
+  product_id: string;
+  product_name: string;
+  current_stock: number;
+  last_updated: string;
+  unit: string;
+}
+
+interface Station {
+  id: string;
+  name: string;
+  omc_id: string;
+  omc?: {
+    id: string;
+    name: string;
+  };
+}
+
+// Mobile-specific types
+interface MobileDashboardConfig {
+  showQuickActions: boolean;
+  showOfflineWarning: boolean;
+  enableTouchGestures: boolean;
+  showBatterySaver: boolean;
+}
+
+// Utility functions for mobile
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat('en-GH', {
+    style: 'currency',
+    currency: 'GHS',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 };
 
-const MobileSaleItem = ({ sale }: { sale: any }) => (
-  <div className="flex justify-between items-center p-3 border-b border-gray-100 last:border-b-0">
-    <div>
-      <p className="font-medium text-sm text-gray-900">{sale.products?.name || 'Unknown Product'}</p>
-      <p className="text-xs text-gray-600">
-        {sale.quantity}L • {new Date(sale.created_at).toLocaleTimeString()}
-      </p>
+const formatNumber = (num: number) => {
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+  return num.toString();
+};
+
+const getBatteryLevel = () => {
+  if ('getBattery' in navigator) {
+    return (navigator as any).getBattery().then((battery: any) => ({
+      level: battery.level * 100,
+      charging: battery.charging,
+    }));
+  }
+  return Promise.resolve({ level: 100, charging: false });
+};
+
+// Mobile-specific components
+const MobileStatusBar = ({ isOnline, pendingSync, batteryLevel, isCharging }: { 
+  isOnline: boolean; 
+  pendingSync: number;
+  batteryLevel: number;
+  isCharging: boolean;
+}) => (
+  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-2">
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        {isOnline ? (
+          <div className="flex items-center gap-1">
+            <Wifi className="w-3 h-3 text-green-600" />
+            <span className="text-xs text-green-700">Online</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1">
+            <WifiOff className="w-3 h-3 text-orange-600" />
+            <span className="text-xs text-orange-700">Offline</span>
+          </div>
+        )}
+        {pendingSync > 0 && (
+          <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">
+            {pendingSync} pending
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {isCharging ? (
+            <BatteryCharging className="w-3 h-3 text-green-600" />
+          ) : (
+            <Battery className="w-3 h-3 text-gray-600" />
+          )}
+          <span className="text-xs">{batteryLevel}%</span>
+        </div>
+        <span className="text-xs text-gray-500">
+          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </div>
     </div>
-    <p className="text-sm font-semibold text-gray-900">₵{sale.total_amount.toLocaleString()}</p>
   </div>
 );
 
-const MobileExpenseItem = ({ expense, onUpdateStatus, onDelete }: { 
-  expense: Expense; 
-  onUpdateStatus: (id: string, status: 'approved' | 'rejected') => void;
-  onDelete: (id: string) => void;
+const MobileQuickAction = ({ 
+  icon: Icon, 
+  label, 
+  onClick, 
+  variant = "default",
+  disabled = false 
+}: { 
+  icon: React.ElementType; 
+  label: string; 
+  onClick: () => void;
+  variant?: "default" | "primary" | "success" | "warning";
+  disabled?: boolean;
 }) => {
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved': return 'bg-green-100 text-green-700';
-      case 'pending': return 'bg-yellow-100 text-yellow-700';
-      case 'rejected': return 'bg-red-100 text-red-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
+  const variantClasses = {
+    default: "bg-gray-100 hover:bg-gray-200 border-gray-200",
+    primary: "bg-blue-100 hover:bg-blue-200 border-blue-200 text-blue-700",
+    success: "bg-green-100 hover:bg-green-200 border-green-200 text-green-700",
+    warning: "bg-orange-100 hover:bg-orange-200 border-orange-200 text-orange-700",
   };
 
   return (
-    <div className="p-3 border-b border-gray-100 last:border-b-0">
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <p className="font-medium text-sm text-gray-900 capitalize">{expense.category}</p>
-          <p className="text-xs text-gray-600">{expense.description}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-sm font-semibold text-gray-900">₵{expense.amount}</p>
-          <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(expense.status)}`}>
-            {expense.status}
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
-        {expense.status === 'pending' && (
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              className="h-6 px-2 bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => onUpdateStatus(expense.id, 'approved')}
-            >
-              <CheckCircle className="w-3 h-3" />
-            </Button>
-            <Button
-              size="sm"
-              className="h-6 px-2 bg-red-600 hover:bg-red-700 text-white"
-              onClick={() => onUpdateStatus(expense.id, 'rejected')}
-            >
-              <XCircle className="w-3 h-3" />
-            </Button>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex flex-col items-center justify-center p-3 rounded-xl border ${variantClasses[variant]} active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed`}
+    >
+      <Icon className="w-6 h-6 mb-1" />
+      <span className="text-xs font-medium">{label}</span>
+    </button>
+  );
+};
+
+const MobileStatCard = ({ 
+  title, 
+  value, 
+  icon: Icon, 
+  trend, 
+  subtitle,
+  onClick 
+}: { 
+  title: string; 
+  value: string | number; 
+  icon: React.ElementType;
+  trend?: 'up' | 'down' | 'neutral';
+  subtitle?: string;
+  onClick?: () => void;
+}) => {
+  const trendColors = {
+    up: "text-green-600",
+    down: "text-red-600",
+    neutral: "text-gray-600"
+  };
+
+  return (
+    <Card 
+      className="active:scale-98 transition-transform"
+      onClick={onClick}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs text-gray-500 mb-1">{title}</p>
+            <p className="text-xl font-bold text-gray-900">{value}</p>
+            {subtitle && <p className="text-xs text-gray-600 mt-1">{subtitle}</p>}
+            {trend && (
+              <div className={`flex items-center gap-1 mt-1 text-xs ${trendColors[trend]}`}>
+                {trend === 'up' && <TrendingUp className="w-3 h-3" />}
+                {trend === 'down' && <TrendingDown className="w-3 h-3" />}
+                {subtitle}
+              </div>
+            )}
           </div>
-        )}
+          <div className="p-2 bg-gray-100 rounded-lg">
+            <Icon className="w-5 h-5 text-gray-700" />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const MobileBottomNav = ({ activeTab, onTabChange }: { 
+  activeTab: string; 
+  onTabChange: (tab: string) => void 
+}) => {
+  const tabs = [
+    { id: 'dashboard', label: 'Home', icon: Home },
+    { id: 'sales', label: 'Sales', icon: BarChart },
+    { id: 'inventory', label: 'Stock', icon: Package },
+    { id: 'expenses', label: 'Expenses', icon: Wallet },
+    { id: 'more', label: 'More', icon: Menu },
+  ];
+
+  return (
+    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-2 safe-area-bottom">
+      <div className="flex items-center justify-around">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          
+          return (
+            <button
+              key={tab.id}
+              onClick={() => onTabChange(tab.id)}
+              className={`flex flex-col items-center justify-center p-2 rounded-lg transition-colors ${
+                isActive ? 'text-blue-600 bg-blue-50' : 'text-gray-600'
+              }`}
+            >
+              <Icon className="w-5 h-5" />
+              <span className="text-xs mt-1">{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 };
 
-const MobileQuickAction = ({ icon: Icon, label, onClick, color = "text-gray-700" }: {
-  icon: any;
-  label: string;
-  onClick: () => void;
-  color?: string;
-}) => (
-  <Button 
-    variant="outline" 
-    className="h-16 flex-col gap-1 bg-white hover:bg-gray-50 border-gray-300 flex-1 min-w-0"
-    onClick={onClick}
-  >
-    <Icon className={`w-5 h-5 ${color}`} />
-    <span className="text-xs text-gray-700">{label}</span>
-  </Button>
-);
+const PullToRefresh = ({ onRefresh, refreshing }: { 
+  onRefresh: () => void; 
+  refreshing: boolean;
+}) => {
+  const [startY, setStartY] = useState(0);
+  const [currentY, setCurrentY] = useState(0);
+  const [refreshingState, setRefreshingState] = useState(false);
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY === 0) {
+      setStartY(e.touches[0].clientY);
+      setCurrentY(e.touches[0].clientY);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (window.scrollY === 0 && startY > 0) {
+      setCurrentY(e.touches[0].clientY);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    const pullDistance = currentY - startY;
+    if (pullDistance > 100 && !refreshing) {
+      setRefreshingState(true);
+      onRefresh();
+      setTimeout(() => setRefreshingState(false), 1000);
+    }
+    setStartY(0);
+    setCurrentY(0);
+  };
+
+  const pullDistance = Math.max(0, currentY - startY);
+  const progress = Math.min(100, (pullDistance / 100) * 100);
+
+  if (refreshing || refreshingState) {
+    return (
+      <div className="flex items-center justify-center py-3 bg-blue-50">
+        <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
+        <span className="ml-2 text-sm text-blue-600">Refreshing...</span>
+      </div>
+    );
+  }
+
+  if (pullDistance > 0) {
+    return (
+      <div 
+        className="flex items-center justify-center py-3"
+        style={{
+          height: `${Math.min(100, pullDistance)}px`,
+          background: `linear-gradient(to bottom, rgba(59, 130, 246, ${progress/100}), white)`
+        }}
+      >
+        <RefreshCw className="w-5 h-5 text-blue-600" style={{ transform: `rotate(${progress * 3.6}deg)` }} />
+        <span className="ml-2 text-sm text-blue-600">
+          {progress >= 100 ? 'Release to refresh' : 'Pull to refresh'}
+        </span>
+      </div>
+    );
+  }
+
+  return null;
+};
+
+// Main Mobile Component
 export function MobileStationManagerDashboard() {
   const { user } = useAuth();
   const { 
     getStationPrice, 
     getStationAllPrices,
-    loading: pricesLoading,
     refreshPrices 
   } = usePrices();
   
+  // State management
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSync, setPendingSync] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<'overview' | 'sales' | 'expenses' | 'inventory'>('overview');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [pumpPrices, setPumpPrices] = useState<PumpPrice[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [station, setStation] = useState<Station | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [batteryLevel, setBatteryLevel] = useState(100);
+  const [isCharging, setIsCharging] = useState(false);
   
-  // Expense state
+  // Data states
+  const [pumps, setPumps] = useState<Pump[]>([]);
+  const [selectedPump, setSelectedPump] = useState<Pump | null>(null);
+  const [fuelStockCard, setFuelStockCard] = useState<FuelStockCard[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   
   // Dialog states
   const [showSalesDialog, setShowSalesDialog] = useState(false);
   const [showExpenseDialog, setShowExpenseDialog] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
-
+  const [showQuickActions, setShowQuickActions] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  
   // Form states
   const [salesForm, setSalesForm] = useState({
-    product_type: 'Petrol',
+    pump_id: '',
     product_id: '',
-    volume: '',
-    amount: '',
+    opening_meter: '',
+    closing_meter: '',
+    unit_price: '',
     date: new Date().toISOString().split('T')[0],
     calculated_amount: '0.00'
   });
@@ -273,22 +474,137 @@ export function MobileStationManagerDashboard() {
     expense_date: new Date().toISOString().split('T')[0],
     type: 'operational' as 'operational' | 'fixed' | 'staff' | 'maintenance' | 'other',
     notes: '',
-    receipt_url: ''
   });
 
   const [inventoryForm, setInventoryForm] = useState({
-    product_type: 'Petrol',
     product_id: '',
     opening_stock: '',
-    deliveries: '',
+    received: '',
     closing_stock: '',
     date: new Date().toISOString().split('T')[0]
   });
 
-  // Load products for dropdowns
-  const [products, setProducts] = useState<Product[]>([]);
+  // Mobile config
+  const [mobileConfig, setMobileConfig] = useState<MobileDashboardConfig>({
+    showQuickActions: true,
+    showOfflineWarning: true,
+    enableTouchGestures: true,
+    showBatterySaver: false,
+  });
 
-  // Load products from database
+  // Refs
+  const initializedRef = useRef(false);
+
+  // Battery monitoring
+  useEffect(() => {
+    const updateBattery = async () => {
+      try {
+        if ('getBattery' in navigator) {
+          const battery = await (navigator as any).getBattery();
+          
+          const updateBatteryInfo = () => {
+            setBatteryLevel(Math.round(battery.level * 100));
+            setIsCharging(battery.charging);
+          };
+          
+          updateBatteryInfo();
+          
+          battery.addEventListener('levelchange', updateBatteryInfo);
+          battery.addEventListener('chargingchange', updateBatteryInfo);
+          
+          return () => {
+            battery.removeEventListener('levelchange', updateBatteryInfo);
+            battery.removeEventListener('chargingchange', updateBatteryInfo);
+          };
+        }
+      } catch (error) {
+        console.error('Battery API not supported:', error);
+      }
+    };
+
+    updateBattery();
+  }, []);
+
+  // Network status
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (pendingSync > 0) {
+        syncOfflineData();
+      }
+    };
+    
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [pendingSync]);
+
+  // Data loading functions
+  const loadStation = useCallback(async () => {
+    if (!user?.station_id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('stations')
+        .select(`
+          *,
+          omc:omc_id (
+            id,
+            name
+          )
+        `)
+        .eq('id', user.station_id)
+        .single();
+
+      if (error) throw error;
+      setStation(data);
+    } catch (error: any) {
+      console.error('Failed to load station:', error);
+    }
+  }, [user?.station_id]);
+
+  const loadPumps = useCallback(async () => {
+    if (!user?.station_id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('pumps')
+        .select('*')
+        .eq('station_id', user.station_id)
+        .order('number');
+
+      if (error) throw error;
+      
+      const pumpsData = data || [];
+      setPumps(pumpsData);
+      
+      if (pumpsData.length > 0) {
+        const defaultPump = pumpsData[0];
+        setSelectedPump(defaultPump);
+        
+        const matchingProduct = products.find(p => 
+          p.name.toLowerCase() === defaultPump.fuel_type?.toLowerCase()
+        );
+        
+        setSalesForm(prev => ({
+          ...prev,
+          pump_id: defaultPump.id,
+          opening_meter: defaultPump.current_meter_reading?.toString() || '0',
+          product_id: matchingProduct?.id || ''
+        }));
+      }
+    } catch (error: any) {
+      console.error('Failed to load pumps:', error);
+      setPumps([]);
+    }
+  }, [user?.station_id, products]);
+
   const loadProducts = useCallback(async () => {
     try {
       const { data, error } = await supabase
@@ -296,28 +612,32 @@ export function MobileStationManagerDashboard() {
         .select('*')
         .order('name');
 
-      if (error) throw error;
+      if (error) {
+        const fallbackProducts: Product[] = [
+          { id: 'petrol', name: 'Petrol', unit: 'L' },
+          { id: 'diesel', name: 'Diesel', unit: 'L' },
+          { id: 'lpg', name: 'LPG', unit: 'kg' }
+        ];
+        setProducts(fallbackProducts);
+        return;
+      }
       
       const productsData = data || [];
       setProducts(productsData);
       
-      // Set default product in forms
-      if (productsData.length > 0) {
+      if (productsData.length > 0 && pumps.length === 0) {
         const defaultProduct = productsData[0];
         setSalesForm(prev => ({ 
           ...prev, 
-          product_type: defaultProduct.name,
           product_id: defaultProduct.id 
         }));
         setInventoryForm(prev => ({
           ...prev,
-          product_type: defaultProduct.name,
           product_id: defaultProduct.id
         }));
       }
     } catch (error) {
       console.error('Failed to load products:', error);
-      // Fallback products
       const fallbackProducts: Product[] = [
         { id: 'petrol', name: 'Petrol', unit: 'L' },
         { id: 'diesel', name: 'Diesel', unit: 'L' },
@@ -325,13 +645,16 @@ export function MobileStationManagerDashboard() {
       ];
       setProducts(fallbackProducts);
     }
-  }, []);
+  }, [pumps.length]);
 
-  // Load current pump prices from Price Context
-  const loadPumpPrices = useCallback(async () => {
+  const loadPumpPrices = useCallback(async (forceRefresh = false) => {
     if (!user?.station_id) return;
     
     try {
+      if (forceRefresh) {
+        await refreshPrices();
+      }
+      
       const stationAllPrices = getStationAllPrices(user.station_id);
       
       const transformedPrices: PumpPrice[] = stationAllPrices.map(price => ({
@@ -343,18 +666,16 @@ export function MobileStationManagerDashboard() {
 
       setPumpPrices(transformedPrices);
       
-      // Update forms with current prices
       if (transformedPrices.length > 0) {
         const currentPrice = transformedPrices[0];
         setSalesForm(prev => ({
           ...prev,
-          product_type: currentPrice.product_type,
-          product_id: currentPrice.product_id
+          product_id: currentPrice.product_id,
+          unit_price: currentPrice.price_per_liter.toString()
         }));
       }
     } catch (error) {
       console.error('Failed to load pump prices:', error);
-      // Fallback prices
       const fallbackPrices: PumpPrice[] = [
         { product_type: 'Petrol', product_id: 'petrol', price_per_liter: 12.50, last_updated: new Date().toISOString() },
         { product_type: 'Diesel', product_id: 'diesel', price_per_liter: 11.80, last_updated: new Date().toISOString() },
@@ -362,9 +683,48 @@ export function MobileStationManagerDashboard() {
       ];
       setPumpPrices(fallbackPrices);
     }
-  }, [user?.station_id, getStationAllPrices]);
+  }, [user?.station_id, getStationAllPrices, refreshPrices]);
 
-  // Load expenses with real data
+  const loadFuelStockCard = useCallback(async () => {
+    if (!user?.station_id) return;
+
+    try {
+      const { data: latestStocks, error } = await supabase
+        .from('daily_tank_stocks')
+        .select(`
+          product_id,
+          closing_stock,
+          stock_date,
+          products (
+            name,
+            unit
+          )
+        `)
+        .eq('station_id', user.station_id)
+        .order('stock_date', { ascending: false });
+
+      if (error) throw error;
+
+      const productMap = new Map();
+      latestStocks?.forEach(stock => {
+        if (!productMap.has(stock.product_id)) {
+          productMap.set(stock.product_id, {
+            product_id: stock.product_id,
+            product_name: stock.products?.name || 'Unknown Product',
+            current_stock: stock.closing_stock,
+            last_updated: stock.stock_date,
+            unit: stock.products?.unit || 'L'
+          });
+        }
+      });
+
+      const uniqueStocks: FuelStockCard[] = Array.from(productMap.values());
+      setFuelStockCard(uniqueStocks);
+    } catch (error) {
+      console.error('Failed to load fuel stock card:', error);
+    }
+  }, [user?.station_id]);
+
   const loadExpenses = useCallback(async () => {
     if (!user?.station_id) return;
 
@@ -389,85 +749,51 @@ export function MobileStationManagerDashboard() {
     }
   }, [user?.station_id]);
 
-  // Load daily report with real data
   const loadDailyReport = useCallback(async () => {
     if (!user?.station_id) return;
     
-    setLoading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
       
       const [
-        { data: salesData, error: salesError },
-        { data: inventoryData, error: inventoryError },
-        { data: shiftsData, error: shiftsError },
-        { data: expensesData, error: expensesError }
+        { data: salesData },
+        { data: expensesData }
       ] = await Promise.all([
         supabase
           .from('sales')
-          .select(`
-            *,
-            products(name),
-            stations(name)
-          `)
+          .select('total_amount')
           .eq('station_id', user.station_id)
           .gte('created_at', `${today}T00:00:00`)
-          .lte('created_at', `${today}T23:59:59`)
-          .order('created_at', { ascending: false }),
-        
-        supabase
-          .from('daily_tank_stocks')
-          .select(`
-            *,
-            products(name)
-          `)
-          .eq('station_id', user.station_id)
-          .gte('stock_date', today)
-          .lte('stock_date', today)
-          .order('created_at', { ascending: false }),
-        
-        supabase
-          .from('shifts')
-          .select('*')
-          .eq('station_id', user.station_id)
-          .eq('status', 'active'),
+          .lte('created_at', `${today}T23:59:59`),
         
         supabase
           .from('expenses')
-          .select('*')
+          .select('amount')
           .eq('station_id', user.station_id)
           .gte('expense_date', today)
           .lte('expense_date', today)
       ]);
 
-      if (salesError) console.error('Sales fetch error:', salesError);
-      if (inventoryError) console.error('Inventory fetch error:', inventoryError);
-      if (shiftsError) console.error('Shifts fetch error:', shiftsError);
-      if (expensesError) console.error('Expenses fetch error:', expensesError);
-
       const total_sales = salesData?.reduce((sum, sale) => sum + (sale.total_amount || 0), 0) || 0;
       const total_expenses = expensesData?.reduce((sum, expense) => sum + (expense.amount || 0), 0) || 0;
-      const fuel_stock = inventoryData?.reduce((sum, inv) => sum + (inv.closing_stock || 0), 0) || 0;
 
       const report: DailyReport = {
         total_sales,
         total_expenses,
-        inventory: inventoryData || [],
+        inventory: [],
         sales: salesData || [],
         expenses: expensesData || [],
-        active_shifts: shiftsData?.length || 0,
-        fuel_stock,
-        pump_prices: pumpPrices
+        active_shifts: 0,
+        fuel_stock: 0,
+        pump_prices: pumpPrices,
+        current_stock: fuelStockCard
       };
 
       setDailyReport(report);
     } catch (error) {
       console.error('Failed to load daily report:', error);
-      toast.error('Failed to load dashboard data');
-    } finally {
-      setLoading(false);
     }
-  }, [user?.station_id, pumpPrices]);
+  }, [user?.station_id, pumpPrices, fuelStockCard]);
 
   const updatePendingCount = useCallback(async () => {
     try {
@@ -480,62 +806,98 @@ export function MobileStationManagerDashboard() {
 
   const syncOfflineData = useCallback(async () => {
     try {
-      toast.info('Starting sync...');
-      const result = await offlineSync.forceSync();
+      toast.info('Syncing data...');
+      await offlineSync.forceSync();
       await updatePendingCount();
       await loadDailyReport();
       await loadExpenses();
       await refreshPrices();
-      
-      if (result.failures > 0) {
-        toast.error(`Sync completed with ${result.failures} failures`);
-      } else {
-        toast.success('Sync completed successfully');
-      }
+      toast.success('Sync completed');
     } catch (error) {
       console.error('Sync failed:', error);
-      toast.error('Sync failed. Please try again.');
+      toast.error('Sync failed');
     }
   }, [loadDailyReport, loadExpenses, updatePendingCount, refreshPrices]);
 
-  // Calculate sales amount automatically using real prices
-  const calculateSalesAmount = useCallback((volume: string, productId: string) => {
-    if (!volume) {
-      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00', amount: '' }));
+  // Refresh all data
+  const refreshAllData = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadDailyReport(),
+        loadPumpPrices(true),
+        loadFuelStockCard(),
+        loadPumps(),
+        loadExpenses(),
+      ]);
+      toast.success('Data refreshed');
+    } catch (error) {
+      console.error('Refresh failed:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadDailyReport, loadPumpPrices, loadFuelStockCard, loadPumps, loadExpenses]);
+
+  // Initialize
+  useEffect(() => {
+    if (initializedRef.current || !user?.station_id) return;
+    
+    initializedRef.current = true;
+
+    const initializeDashboard = async () => {
+      try {
+        await offlineSync.init();
+        await loadStation();
+        await loadProducts();
+        await loadPumps();
+        await loadPumpPrices(true);
+        await loadFuelStockCard();
+        await loadExpenses();
+        await loadDailyReport();
+        await updatePendingCount();
+      } catch (error) {
+        console.error('Failed to initialize dashboard:', error);
+        toast.error('Failed to load dashboard');
+      }
+    };
+
+    initializeDashboard();
+  }, [user?.station_id]);
+
+  // Form handlers
+  const handleRecordSales = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id || !salesForm.pump_id) {
+      toast.error('Please select a pump');
       return;
     }
 
-    const price = getStationPrice(user?.station_id || '', productId) || 0;
-    const calculatedAmount = parseFloat(volume) * price;
-    setSalesForm(prev => ({
-      ...prev,
-      calculated_amount: calculatedAmount.toFixed(2),
-      amount: calculatedAmount.toFixed(2)
-    }));
-  }, [user?.station_id, getStationPrice]);
-
-  // Event handlers with real data integration
-  const handleRecordSales = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.station_id) return;
-
-    if (!salesForm.volume || parseFloat(salesForm.volume) <= 0) {
-      toast.error('Please enter a valid volume');
+    const opening = parseFloat(salesForm.opening_meter);
+    const closing = parseFloat(salesForm.closing_meter);
+    
+    if (isNaN(opening) || isNaN(closing) || closing < opening) {
+      toast.error('Invalid meter readings');
       return;
     }
 
     setSubmitting(true);
+    
+    const price = getStationPrice(user.station_id, salesForm.product_id) || 0;
+    const volume = closing - opening;
+    const calculatedAmount = volume * price;
+    
     const salesData = {
       station_id: user.station_id,
-      product_id: salesForm.product_id,
-      quantity: parseFloat(salesForm.volume),
-      unit_price: getStationPrice(user.station_id, salesForm.product_id) || 0,
-      total_amount: parseFloat(salesForm.amount),
+      pump_id: salesForm.pump_id,
+      opening_meter: opening,
+      closing_meter: closing,
+      unit_price: price,
+      total_amount: calculatedAmount,
+      cash_received: calculatedAmount,
       payment_method: 'cash',
-      customer_type: 'retail',
+      product_id: salesForm.product_id,
       created_by: user.id,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      transaction_time: new Date().toISOString(),
     };
 
     try {
@@ -545,19 +907,37 @@ export function MobileStationManagerDashboard() {
           .insert([salesData]);
 
         if (error) throw error;
-        toast.success('Sale recorded successfully!');
+
+        await supabase
+          .from('pumps')
+          .update({ 
+            current_meter_reading: closing,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', salesForm.pump_id);
+
+        toast.success(`Sale recorded! ₵${calculatedAmount.toFixed(2)}`);
       } else {
         await offlineSync.addToQueue('create', 'sales', salesData);
         await updatePendingCount();
-        toast.success('Sale queued for sync (offline mode)');
+        toast.success('Sale queued for sync');
       }
       
       setShowSalesDialog(false);
-      resetSalesForm();
+      setSalesForm({
+        pump_id: selectedPump?.id || '',
+        product_id: selectedPump?.id || '',
+        opening_meter: selectedPump?.current_meter_reading?.toString() || '0',
+        closing_meter: '',
+        unit_price: '',
+        date: new Date().toISOString().split('T')[0],
+        calculated_amount: '0.00'
+      });
       await loadDailyReport();
+      await loadPumps();
     } catch (error: any) {
       console.error('Failed to record sales:', error);
-      toast.error(`Failed to record sale: ${error.message}`);
+      toast.error('Failed to record sale');
     } finally {
       setSubmitting(false);
     }
@@ -566,11 +946,6 @@ export function MobileStationManagerDashboard() {
   const handleRecordExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id) return;
-
-    if (!expenseForm.amount || parseFloat(expenseForm.amount) <= 0) {
-      toast.error('Please enter a valid amount');
-      return;
-    }
 
     setSubmitting(true);
     const expenseData = {
@@ -581,354 +956,216 @@ export function MobileStationManagerDashboard() {
       expense_date: expenseForm.expense_date,
       type: expenseForm.type,
       notes: expenseForm.notes,
-      receipt_url: expenseForm.receipt_url,
       created_by: user.id,
       status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    try {
-      if (isOnline) {
-        const { data, error } = await supabase
-          .from('expenses')
-          .insert([expenseData])
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        toast.success('Expense recorded successfully!');
-        setShowExpenseDialog(false);
-        resetExpenseForm();
-        await loadExpenses();
-        await loadDailyReport();
-      } else {
-        await offlineSync.addToQueue('create', 'expenses', expenseData);
-        await updatePendingCount();
-        toast.success('Expense queued for sync (offline mode)');
-        setShowExpenseDialog(false);
-        resetExpenseForm();
-      }
-    } catch (error: any) {
-      console.error('Failed to record expense:', error);
-      toast.error(`Failed to record expense: ${error.message}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleUpdateExpenseStatus = async (expenseId: string, status: 'approved' | 'rejected') => {
-    try {
-      const { error } = await supabase
-        .from('expenses')
-        .update({ 
-          status, 
-          approved_by: user?.id,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', expenseId);
-
-      if (error) throw error;
-
-      toast.success(`Expense ${status} successfully`);
-      await loadExpenses();
-    } catch (error: any) {
-      console.error('Failed to update expense:', error);
-      toast.error('Failed to update expense status');
-    }
-  };
-
-  const handleDeleteExpense = async (expenseId: string) => {
-    try {
-      const { error } = await supabase
-        .from('expenses')
-        .delete()
-        .eq('id', expenseId);
-
-      if (error) throw error;
-
-      toast.success('Expense deleted successfully');
-      await loadExpenses();
-    } catch (error: any) {
-      console.error('Failed to delete expense:', error);
-      toast.error('Failed to delete expense');
-    }
-  };
-
-  // Fixed Inventory Handler
-  const handleInventory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.station_id) return;
-
-    if (!inventoryForm.opening_stock || !inventoryForm.closing_stock) {
-      toast.error('Please fill in opening and closing stock');
-      return;
-    }
-
-    setSubmitting(true);
-    
-    const inventoryData = {
-      station_id: user.station_id,
-      product_id: inventoryForm.product_id,
-      opening_stock: parseFloat(inventoryForm.opening_stock) || 0,
-      closing_stock: parseFloat(inventoryForm.closing_stock) || 0,
-      deliveries: parseFloat(inventoryForm.deliveries) || 0,
-      stock_date: inventoryForm.date,
-      recorded_by: user.id,
-      notes: "Daily inventory record",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
     };
 
     try {
       if (isOnline) {
         const { error } = await supabase
-          .from('daily_tank_stocks')
-          .insert([inventoryData]);
+          .from('expenses')
+          .insert([expenseData]);
 
         if (error) throw error;
-        
-        toast.success('Inventory recorded successfully!');
-        setShowInventoryDialog(false);
-        resetInventoryForm();
+
+        toast.success('Expense recorded!');
+        setShowExpenseDialog(false);
+        setExpenseForm({
+          category: 'operational',
+          description: '',
+          amount: '',
+          expense_date: new Date().toISOString().split('T')[0],
+          type: 'operational',
+          notes: '',
+        });
+        await loadExpenses();
         await loadDailyReport();
       } else {
-        await offlineSync.addToQueue('create', 'daily_tank_stocks', inventoryData);
+        await offlineSync.addToQueue('create', 'expenses', expenseData);
         await updatePendingCount();
-        toast.success('Inventory queued for sync (offline mode)');
-        setShowInventoryDialog(false);
-        resetInventoryForm();
+        toast.success('Expense queued for sync');
+        setShowExpenseDialog(false);
+        setExpenseForm({
+          category: 'operational',
+          description: '',
+          amount: '',
+          expense_date: new Date().toISOString().split('T')[0],
+          type: 'operational',
+          notes: '',
+        });
       }
     } catch (error: any) {
-      console.error('Failed to record inventory:', error);
-      toast.error(`Failed to record inventory: ${error.message}`);
+      console.error('Failed to record expense:', error);
+      toast.error('Failed to record expense');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Form reset functions
-  const resetSalesForm = () => {
-    const defaultProduct = products[0];
-    setSalesForm({
-      product_type: defaultProduct?.name || 'Petrol',
-      product_id: defaultProduct?.id || '',
-      volume: '',
-      amount: '',
-      date: new Date().toISOString().split('T')[0],
-      calculated_amount: '0.00'
-    });
-  };
+  const calculateSalesAmount = useCallback(() => {
+    if (!salesForm.opening_meter || !salesForm.closing_meter || !salesForm.product_id) {
+      return;
+    }
 
-  const resetExpenseForm = () => {
-    setExpenseForm({
-      category: 'operational',
-      description: '',
-      amount: '',
-      expense_date: new Date().toISOString().split('T')[0],
-      type: 'operational',
-      notes: '',
-      receipt_url: ''
-    });
-  };
-
-  const resetInventoryForm = () => {
-    const defaultProduct = products[0];
-    setInventoryForm({
-      product_type: defaultProduct?.name || 'Petrol',
-      product_id: defaultProduct?.id || '',
-      opening_stock: '',
-      deliveries: '',
-      closing_stock: '',
-      date: new Date().toISOString().split('T')[0]
-    });
-  };
-
-  // Initialize dashboard
-  useEffect(() => {
-    if (!user?.station_id) return;
-
-    const initializeDashboard = async () => {
-      try {
-        await offlineSync.init();
-        await loadProducts();
-        await loadPumpPrices();
-        await loadExpenses();
-        await loadDailyReport();
-        await updatePendingCount();
-        await refreshPrices();
-      } catch (error) {
-        console.error('Failed to initialize dashboard:', error);
-        toast.error('Failed to initialize dashboard');
-      }
-    };
-
-    initializeDashboard();
-  }, [user?.station_id]);
-
-  // Network status listeners
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (pendingSync > 0) {
-        syncOfflineData();
-      }
-    };
+    const opening = parseFloat(salesForm.opening_meter);
+    const closing = parseFloat(salesForm.closing_meter);
     
-    const handleOffline = () => setIsOnline(false);
+    if (isNaN(opening) || isNaN(closing)) {
+      return;
+    }
+    
+    if (closing < opening) {
+      return;
+    }
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const volume = closing - opening;
+    const price = getStationPrice(user?.station_id || '', salesForm.product_id) || 0;
+    const calculatedAmount = volume * price;
+    
+    setSalesForm(prev => ({
+      ...prev,
+      calculated_amount: calculatedAmount.toFixed(2)
+    }));
+  }, [salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id, user?.station_id, getStationPrice]);
 
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [syncOfflineData, pendingSync]);
+  // Sales calculation effect
+  useEffect(() => {
+    calculateSalesAmount();
+  }, [calculateSalesAmount]);
 
-  // Loading skeletons
-  const MobileStatsSkeleton = () => (
-    <div className="grid grid-cols-2 gap-3 mb-4">
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="p-3 rounded-xl bg-gray-100">
-          <div className="flex items-center justify-between">
-            <div className="space-y-2">
-              <Skeleton className="h-3 w-12" />
-              <Skeleton className="h-4 w-10" />
-            </div>
-            <Skeleton className="w-6 h-6 rounded" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
-  const MobileContentSkeleton = () => (
-    <Card className="border-0 shadow-sm">
-      <CardContent className="p-4">
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex justify-between items-center p-3">
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-3 w-16" />
-              </div>
-              <Skeleton className="h-6 w-12" />
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-
-  if (loading && !dailyReport) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-4">
-        {/* Header Skeleton */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="space-y-2">
-            <Skeleton className="h-6 w-32" />
-            <Skeleton className="h-4 w-24" />
-          </div>
-          <Skeleton className="h-8 w-8 rounded-full" />
-        </div>
-
-        <MobileStatsSkeleton />
-
-        {/* Navigation Skeleton */}
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-          {['Overview', 'Sales', 'Expenses', 'Inventory'].map((item) => (
-            <Skeleton key={item} className="h-8 w-20 rounded-lg" />
-          ))}
-        </div>
-
-        <MobileContentSkeleton />
-      </div>
-    );
-  }
-
-  const renderOverview = () => (
+  // Render content based on active tab
+  const renderDashboard = () => (
     <div className="space-y-4">
-      {/* Pump Prices */}
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
+      {/* Pull to refresh */}
+      <PullToRefresh onRefresh={refreshAllData} refreshing={refreshing} />
+      
+      {/* Welcome card */}
+      <Card className="bg-gradient-to-r from-blue-600 to-blue-800 text-white">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold">{station?.name || 'Station'}</h2>
+              <p className="text-sm opacity-90">Welcome back, {user?.name?.split(' ')[0] || 'Manager'}</p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-white border-white hover:bg-white/20"
+              onClick={refreshAllData}
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-2 gap-3">
+        <MobileStatCard
+          title="Today's Sales"
+          value={formatCurrency(dailyReport?.total_sales || 0)}
+          icon={DollarSign}
+          subtitle={`${dailyReport?.sales?.length || 0} transactions`}
+          onClick={() => setActiveTab('sales')}
+        />
+        <MobileStatCard
+          title="Expenses"
+          value={formatCurrency(dailyReport?.total_expenses || 0)}
+          icon={TrendingUp}
+          subtitle={`${expenses.length} records`}
+          onClick={() => setActiveTab('expenses')}
+        />
+        <MobileStatCard
+          title="Fuel Stock"
+          value={`${fuelStockCard.reduce((sum, item) => sum + (item.current_stock || 0), 0).toLocaleString()}L`}
+          icon={Database}
+          subtitle={`${fuelStockCard.length} products`}
+          onClick={() => setActiveTab('inventory')}
+        />
+        <MobileStatCard
+          title="Active Pumps"
+          value={pumps.length}
+          icon={Gauge}
+          subtitle={`${pumps.filter(p => p.status === 'active').length} active`}
+        />
+      </div>
+
+      {/* Current Prices */}
+      <Card>
+        <CardHeader className="pb-3">
           <CardTitle className="text-base">Current Prices</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {pricesLoading ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="flex justify-between items-center p-2">
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-5 w-12" />
-                </div>
-              ))
-            ) : pumpPrices.length > 0 ? (
-              pumpPrices.map((price) => (
-                <div key={price.product_id} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                  <span className="text-sm font-medium text-gray-900">{price.product_type}</span>
-                  <span className="text-sm font-bold text-green-600">
-                    ₵{price.price_per_liter.toFixed(2)}
-                  </span>
-                </div>
-              ))
-            ) : (
-              <p className="text-center text-gray-500 py-2 text-sm">No active prices</p>
-            )}
-          </div>
+        <CardContent className="space-y-2">
+          {pumpPrices.slice(0, 3).map((price) => (
+            <div key={price.product_id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+              <span className="font-medium">{price.product_type}</span>
+              <span className="font-bold text-green-600">
+                ₵{price.price_per_liter.toFixed(2)}
+              </span>
+            </div>
+          ))}
+          {pumpPrices.length === 0 && (
+            <p className="text-center text-gray-500 py-2">No prices available</p>
+          )}
         </CardContent>
       </Card>
 
       {/* Quick Actions */}
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base">Quick Actions</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-3">
-            <MobileQuickAction
-              icon={DollarSign}
-              label="Record Sale"
-              onClick={() => setShowSalesDialog(true)}
-              color="text-green-600"
-            />
-            <MobileQuickAction
-              icon={Receipt}
-              label="Add Expense"
-              onClick={() => setShowExpenseDialog(true)}
-              color="text-red-600"
-            />
-            <MobileQuickAction
-              icon={Package}
-              label="Inventory"
-              onClick={() => setShowInventoryDialog(true)}
-              color="text-blue-600"
-            />
-            <MobileQuickAction
-              icon={RefreshCw}
-              label="Sync Data"
-              onClick={syncOfflineData}
-              color="text-purple-600"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recent Sales */}
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base">Recent Sales</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {dailyReport?.sales?.slice(0, 3).length === 0 ? (
-            <p className="text-center text-gray-500 py-4 text-sm">No sales today</p>
-          ) : (
-            <div>
-              {dailyReport?.sales?.slice(0, 3).map((sale: any) => (
-                <MobileSaleItem key={sale.id} sale={sale} />
-              ))}
+      {mobileConfig.showQuickActions && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Quick Actions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-4 gap-2">
+              <MobileQuickAction
+                icon={ShoppingCart}
+                label="Record Sale"
+                onClick={() => setShowSalesDialog(true)}
+                variant="primary"
+              />
+              <MobileQuickAction
+                icon={Receipt}
+                label="Add Expense"
+                onClick={() => setShowExpenseDialog(true)}
+                variant="warning"
+              />
+              <MobileQuickAction
+                icon={Package}
+                label="Inventory"
+                onClick={() => setShowInventoryDialog(true)}
+                variant="success"
+              />
+              <MobileQuickAction
+                icon={ClipboardList}
+                label="More"
+                onClick={() => setShowQuickActions(true)}
+                variant="default"
+              />
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Recent Activity */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Recent Activity</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {expenses.slice(0, 3).map((expense) => (
+            <div key={expense.id} className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">{expense.description}</p>
+                <p className="text-xs text-gray-500">
+                  {new Date(expense.expense_date).toLocaleDateString()}
+                </p>
+              </div>
+              <span className="font-semibold">₵{expense.amount}</span>
+            </div>
+          ))}
+          {expenses.length === 0 && (
+            <p className="text-center text-gray-500 py-2">No recent activity</p>
           )}
         </CardContent>
       </Card>
@@ -936,397 +1173,560 @@ export function MobileStationManagerDashboard() {
   );
 
   const renderSales = () => (
-    <Card className="border-0 shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">Sales Management</CardTitle>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">Sales Management</h2>
         <Button 
-          size="sm" 
-          style={{ backgroundColor: '#0B2265' }}
+          size="sm"
           onClick={() => setShowSalesDialog(true)}
+          className="bg-blue-600 hover:bg-blue-700"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4 h-4 mr-1" />
+          New Sale
         </Button>
-      </CardHeader>
-      <CardContent>
-        {dailyReport?.sales?.length === 0 ? (
-          <p className="text-center text-gray-500 py-8 text-sm">No sales recorded today</p>
-        ) : (
-          <div>
-            {dailyReport?.sales?.map((sale: any) => (
-              <MobileSaleItem key={sale.id} sale={sale} />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+      </div>
 
-  const renderExpenses = () => (
-    <Card className="border-0 shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">Expense Management</CardTitle>
-        <Button 
-          size="sm" 
-          style={{ backgroundColor: '#0B2265' }}
-          onClick={() => setShowExpenseDialog(true)}
-        >
-          <Plus className="w-4 h-4" />
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {expenses.length === 0 ? (
-          <p className="text-center text-gray-500 py-8 text-sm">No expenses recorded</p>
-        ) : (
-          <div>
-            {expenses.map((expense) => (
-              <MobileExpenseItem
-                key={expense.id}
-                expense={expense}
-                onUpdateStatus={handleUpdateExpenseStatus}
-                onDelete={handleDeleteExpense}
-              />
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-
-  const renderInventory = () => (
-    <Card className="border-0 shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">Inventory</CardTitle>
-        <Button 
-          size="sm" 
-          style={{ backgroundColor: '#0B2265' }}
-          onClick={() => setShowInventoryDialog(true)}
-        >
-          <Plus className="w-4 h-4" />
-        </Button>
-      </CardHeader>
-      <CardContent>
-        {dailyReport?.inventory?.length === 0 ? (
-          <p className="text-center text-gray-500 py-8 text-sm">No inventory data</p>
-        ) : (
-          <div className="space-y-3">
-            {dailyReport?.inventory?.map((item: any) => (
-              <div key={item.id} className="p-3 bg-gray-50 rounded-lg">
-                <div className="flex justify-between items-center">
+      {/* Pump Selection */}
+      <Card>
+        <CardContent className="p-4">
+          <Label className="mb-2 block">Select Pump</Label>
+          <div className="space-y-2">
+            {pumps.map((pump) => (
+              <button
+                key={pump.id}
+                onClick={() => {
+                  setSelectedPump(pump);
+                  setSalesForm(prev => ({
+                    ...prev,
+                    pump_id: pump.id,
+                    opening_meter: pump.current_meter_reading?.toString() || '0'
+                  }));
+                }}
+                className={`w-full p-3 rounded-lg text-left ${selectedPump?.id === pump.id ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 hover:bg-gray-100'}`}
+              >
+                <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium text-sm text-gray-900">{item.products?.name || 'Unknown Product'}</p>
-                    <p className="text-xs text-gray-600">
-                      Stock: {item.closing_stock}L
+                    <p className="font-medium">{pump.name}</p>
+                    <p className="text-sm text-gray-600">
+                      Pump {pump.number} • {pump.fuel_type}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-gray-600">
-                      {new Date(item.stock_date).toLocaleDateString()}
-                    </p>
+                    <p className="text-sm font-semibold">{pump.current_meter_reading || 0}L</p>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${pump.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                      {pump.status}
+                    </span>
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
+            {pumps.length === 0 && (
+              <p className="text-center text-gray-500 py-4">No pumps configured</p>
+            )}
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      {/* Recent Sales */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Recent Sales</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {dailyReport?.sales?.slice(0, 5).map((sale: any) => (
+            <div key={sale.id} className="p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Sale #{sale.id?.slice(-6)}</p>
+                  <p className="text-xs text-gray-600">
+                    {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-green-600">₵{sale.total_amount?.toFixed(2) || '0.00'}</p>
+                  <p className="text-xs text-gray-600">
+                    {sale.closing_meter - sale.opening_meter}L
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
   );
 
-  return (
-    <div className="min-h-screen bg-gray-50 pb-16">
-      <div className="p-4">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Station Operations</h1>
-            <p className="text-xs text-gray-600">Daily Management</p>
+  const renderInventory = () => (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">Inventory Management</h2>
+        <Button 
+          size="sm"
+          onClick={() => setShowInventoryDialog(true)}
+          className="bg-green-600 hover:bg-green-700"
+        >
+          <Plus className="w-4 h-4 mr-1" />
+          Update Stock
+        </Button>
+      </div>
+
+      {/* Current Stock */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Current Stock Levels</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {fuelStockCard.map((item) => (
+            <div key={item.product_id} className="p-4 bg-gray-50 rounded-xl">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="font-bold text-lg">{item.product_name}</p>
+                  <p className="text-sm text-gray-600">
+                    Last updated: {new Date(item.last_updated).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-blue-600">
+                    {item.current_stock?.toLocaleString()}{item.unit}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+          {fuelStockCard.length === 0 && (
+            <p className="text-center text-gray-500 py-8">No stock data available</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const renderExpenses = () => (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">Expense Management</h2>
+        <Button 
+          size="sm"
+          onClick={() => setShowExpenseDialog(true)}
+          className="bg-orange-600 hover:bg-orange-700"
+        >
+          <Plus className="w-4 h-4 mr-1" />
+          Add Expense
+        </Button>
+      </div>
+
+      {/* Expense Summary */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="text-center mb-4">
+            <p className="text-sm text-gray-600">Total Expenses Today</p>
+            <p className="text-3xl font-bold text-gray-900">
+              ₵{(dailyReport?.total_expenses || 0).toFixed(2)}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className={`px-2 py-1 rounded-lg flex items-center gap-1 ${isOnline ? 'bg-green-100' : 'bg-orange-100'}`}>
+        </CardContent>
+      </Card>
+
+      {/* Recent Expenses */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Recent Expenses</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {expenses.map((expense) => (
+            <div key={expense.id} className="p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-medium capitalize">{expense.category}</p>
+                  <p className="text-sm text-gray-600">{expense.description}</p>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-red-600">₵{expense.amount}</p>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                    expense.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                    expense.status === 'approved' ? 'bg-green-100 text-green-800' :
+                    'bg-red-100 text-red-800'
+                  }`}>
+                    {expense.status}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
+              </div>
+            </div>
+          ))}
+          {expenses.length === 0 && (
+            <p className="text-center text-gray-500 py-8">No expenses recorded</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const renderMore = () => (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold">More Options</h2>
+      
+      {/* Sync Status */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
               {isOnline ? (
                 <>
-                  <Wifi className="w-3 h-3 text-green-600" />
-                  <span className="text-xs text-green-700">Online</span>
+                  <Wifi className="w-5 h-5 text-green-600" />
+                  <span className="font-medium">Online</span>
                 </>
               ) : (
                 <>
-                  <WifiOff className="w-3 h-3 text-orange-600" />
-                  <span className="text-xs text-orange-700">Offline</span>
+                  <WifiOff className="w-5 h-5 text-orange-600" />
+                  <span className="font-medium">Offline</span>
                 </>
               )}
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                loadDailyReport();
-                loadExpenses();
-              }}
-              disabled={loading}
-              className="w-8 h-8 p-0"
-            >
-              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
-          </div>
-        </div>
-
-        {/* Sync Status */}
-        {pendingSync > 0 && (
-          <div className="mb-4 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-yellow-600" />
-              <span className="text-xs text-yellow-700">
-                {pendingSync} pending sync
-              </span>
-            </div>
-            {isOnline && (
+            {pendingSync > 0 && (
               <Button 
                 size="sm" 
                 onClick={syncOfflineData}
-                className="bg-yellow-600 hover:bg-yellow-700 text-white h-6 px-2 text-xs"
+                variant="outline"
+                className="gap-2"
               >
-                Sync Now
+                <Upload className="w-4 h-4" />
+                Sync ({pendingSync})
               </Button>
             )}
           </div>
-        )}
-
-        <MobileStatsGrid
-          todaySales={dailyReport?.total_sales || 0}
-          totalExpenses={dailyReport?.total_expenses || 0}
-          fuelStock={dailyReport?.fuel_stock || 0}
-          activeShifts={dailyReport?.active_shifts || 0}
-        />
-
-        {/* Navigation Tabs */}
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-          {[
-            { key: 'overview' as const, label: 'Overview', icon: BarChart3 },
-            { key: 'sales' as const, label: 'Sales', icon: DollarSign },
-            { key: 'expenses' as const, label: 'Expenses', icon: Receipt },
-            { key: 'inventory' as const, label: 'Inventory', icon: Package },
-          ].map((item) => {
-            const IconComponent = item.icon;
-            const isActive = activeSection === item.key;
+          
+          <div className="space-y-3">
+            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
+              <div className="flex items-center gap-3">
+                <Settings className="w-5 h-5" />
+                <span>Settings</span>
+              </div>
+            </button>
             
-            return (
-              <Button
-                key={item.key}
-                variant={isActive ? "default" : "outline"}
-                size="sm"
-                onClick={() => setActiveSection(item.key)}
-                className={`flex items-center gap-1 whitespace-nowrap ${
-                  isActive ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'
-                }`}
-              >
-                <IconComponent className="w-3 h-3" />
-                <span className="text-xs">{item.label}</span>
-              </Button>
-            );
-          })}
-        </div>
+            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
+              <div className="flex items-center gap-3">
+                <Bell className="w-5 h-5" />
+                <span>Notifications</span>
+              </div>
+            </button>
+            
+            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
+              <div className="flex items-center gap-3">
+                <Download className="w-5 h-5" />
+                <span>Export Reports</span>
+              </div>
+            </button>
+            
+            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
+              <div className="flex items-center gap-3">
+                <History className="w-5 h-5" />
+                <span>View History</span>
+              </div>
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 
-        {/* Content Sections */}
-        {activeSection === 'overview' && renderOverview()}
-        {activeSection === 'sales' && renderSales()}
-        {activeSection === 'expenses' && renderExpenses()}
-        {activeSection === 'inventory' && renderInventory()}
+  // Render content based on active tab
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return renderDashboard();
+      case 'sales':
+        return renderSales();
+      case 'inventory':
+        return renderInventory();
+      case 'expenses':
+        return renderExpenses();
+      case 'more':
+        return renderMore();
+      default:
+        return renderDashboard();
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 pb-16 safe-area-padding">
+      {/* Status Bar */}
+      <MobileStatusBar 
+        isOnline={isOnline} 
+        pendingSync={pendingSync}
+        batteryLevel={batteryLevel}
+        isCharging={isCharging}
+      />
+
+      {/* Main Content */}
+      <div className="px-4 py-4">
+        {renderContent()}
       </div>
 
-      {/* Dialogs */}
+      {/* Bottom Navigation */}
+      <MobileBottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+
       {/* Sales Dialog */}
       <Dialog open={showSalesDialog} onOpenChange={setShowSalesDialog}>
-        <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
           <DialogHeader>
-            <DialogTitle className="text-gray-900">Record Sales</DialogTitle>
+            <DialogTitle className="text-lg">Record Sale</DialogTitle>
+            <DialogDescription>Enter pump meter readings</DialogDescription>
           </DialogHeader>
+          
           <form onSubmit={handleRecordSales} className="space-y-4">
-            <div>
-              <Label className="text-gray-700">Product Type</Label>
-              <select
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
-                value={salesForm.product_type}
-                onChange={(e) => {
-                  const selectedProduct = products.find(p => p.name === e.target.value);
-                  setSalesForm({ 
-                    ...salesForm, 
-                    product_type: e.target.value,
-                    product_id: selectedProduct?.id || '' 
-                  });
-                  calculateSalesAmount(salesForm.volume, selectedProduct?.id || '');
-                }}
-              >
-                {products.map((product) => (
-                  <option key={product.id} value={product.name}>
-                    {product.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label className="text-gray-700">Volume (Liters)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={salesForm.volume}
-                onChange={(e) => {
-                  setSalesForm({ ...salesForm, volume: e.target.value });
-                  calculateSalesAmount(e.target.value, salesForm.product_id);
-                }}
-                placeholder="0.00"
-                required
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-              <Label className="text-blue-700 font-semibold">Calculated Amount</Label>
-              <div className="flex items-center gap-2 mt-1">
-                <Calculator className="w-4 h-4 text-blue-600" />
-                <span className="text-lg font-bold text-blue-700">
-                  ₵{salesForm.calculated_amount}
-                </span>
+            {selectedPump && (
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="font-medium text-blue-800">Pump: {selectedPump.name}</p>
+                <p className="text-sm text-blue-600">Current: {selectedPump.current_meter_reading}L</p>
               </div>
+            )}
+            
+            <div className="space-y-3">
+              <div>
+                <Label>Opening Meter (L)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={salesForm.opening_meter}
+                  onChange={(e) => setSalesForm({ ...salesForm, opening_meter: e.target.value })}
+                  placeholder="0.00"
+                  required
+                  className="text-lg"
+                />
+              </div>
+              
+              <div>
+                <Label>Closing Meter (L)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={salesForm.closing_meter}
+                  onChange={(e) => setSalesForm({ ...salesForm, closing_meter: e.target.value })}
+                  placeholder="0.00"
+                  required
+                  className="text-lg"
+                />
+              </div>
+              
+              {salesForm.calculated_amount !== '0.00' && (
+                <div className="p-3 bg-green-50 rounded-lg">
+                  <p className="text-sm text-green-800">Amount to collect:</p>
+                  <p className="text-xl font-bold text-green-700">₵{salesForm.calculated_amount}</p>
+                </div>
+              )}
             </div>
-            <Button 
-              type="submit" 
-              className="w-full" 
-              style={{ backgroundColor: '#0B2265' }}
-              disabled={submitting}
-            >
-              {submitting ? 'Recording...' : 'Save Sale'}
-            </Button>
+            
+            <DialogFooter>
+              <Button
+                type="submit"
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={submitting}
+              >
+                {submitting ? 'Recording...' : 'Record Sale'}
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
       {/* Expense Dialog */}
       <Dialog open={showExpenseDialog} onOpenChange={setShowExpenseDialog}>
-        <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
           <DialogHeader>
-            <DialogTitle className="text-gray-900">Add Expense</DialogTitle>
+            <DialogTitle className="text-lg">Add Expense</DialogTitle>
           </DialogHeader>
+          
           <form onSubmit={handleRecordExpense} className="space-y-4">
-            <div>
-              <Label className="text-gray-700">Category</Label>
-              <select
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
-                value={expenseForm.category}
-                onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
+            <div className="space-y-3">
+              <div>
+                <Label>Description</Label>
+                <Input
+                  value={expenseForm.description}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
+                  placeholder="What was this expense for?"
+                  required
+                />
+              </div>
+              
+              <div>
+                <Label>Amount (₵)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={expenseForm.amount}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                  placeholder="0.00"
+                  required
+                  className="text-lg"
+                />
+              </div>
+              
+              <div>
+                <Label>Category</Label>
+                <select
+                  className="w-full p-2 border rounded-lg"
+                  value={expenseForm.category}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
+                >
+                  <option value="operational">Operational</option>
+                  <option value="maintenance">Maintenance</option>
+                  <option value="supplies">Supplies</option>
+                  <option value="staff">Staff</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+            
+            <DialogFooter>
+              <Button
+                type="submit"
+                className="w-full bg-orange-600 hover:bg-orange-700"
+                disabled={submitting}
               >
-                <option value="operational">Operational</option>
-                <option value="maintenance">Maintenance</option>
-                <option value="supplies">Supplies</option>
-                <option value="utilities">Utilities</option>
-                <option value="staff">Staff</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div>
-              <Label className="text-gray-700">Description</Label>
-              <Input
-                value={expenseForm.description}
-                onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
-                placeholder="Expense description"
-                required
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <div>
-              <Label className="text-gray-700">Amount (₵)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={expenseForm.amount}
-                onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
-                placeholder="0.00"
-                required
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <Button 
-              type="submit" 
-              className="w-full" 
-              style={{ backgroundColor: '#0B2265' }}
-              disabled={submitting}
-            >
-              {submitting ? 'Recording...' : 'Record Expense'}
-            </Button>
+                {submitting ? 'Saving...' : 'Save Expense'}
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
       {/* Inventory Dialog */}
       <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
-        <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
           <DialogHeader>
-            <DialogTitle className="text-gray-900">Inventory Management</DialogTitle>
+            <DialogTitle className="text-lg">Update Inventory</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleInventory} className="space-y-4">
-            <div>
-              <Label className="text-gray-700">Product Type</Label>
-              <select
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
-                value={inventoryForm.product_type}
-                onChange={(e) => {
-                  const selectedProduct = products.find(p => p.name === e.target.value);
-                  setInventoryForm({ 
-                    ...inventoryForm, 
-                    product_type: e.target.value,
-                    product_id: selectedProduct?.id || '' 
-                  });
-                }}
+          
+          <form onSubmit={handleRecordExpense} className="space-y-4">
+            <div className="space-y-3">
+              <div>
+                <Label>Product</Label>
+                <select
+                  className="w-full p-2 border rounded-lg"
+                  value={inventoryForm.product_id}
+                  onChange={(e) => setInventoryForm({ ...inventoryForm, product_id: e.target.value })}
+                  required
+                >
+                  <option value="">Select product</option>
+                  {products.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label>Opening Stock</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={inventoryForm.opening_stock}
+                    onChange={(e) => setInventoryForm({ ...inventoryForm, opening_stock: e.target.value })}
+                    placeholder="0.00"
+                  />
+                </div>
+                
+                <div>
+                  <Label>Received</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={inventoryForm.received}
+                    onChange={(e) => setInventoryForm({ ...inventoryForm, received: e.target.value })}
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <Label>Closing Stock</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={inventoryForm.closing_stock}
+                  onChange={(e) => setInventoryForm({ ...inventoryForm, closing_stock: e.target.value })}
+                  placeholder="0.00"
+                  required
+                />
+              </div>
+            </div>
+            
+            <DialogFooter>
+              <Button
+                type="submit"
+                className="w-full bg-green-600 hover:bg-green-700"
+                disabled={submitting}
               >
-                {products.map((product) => (
-                  <option key={product.id} value={product.name}>
-                    {product.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label className="text-gray-700">Opening Stock (L)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={inventoryForm.opening_stock}
-                onChange={(e) => setInventoryForm({ ...inventoryForm, opening_stock: e.target.value })}
-                required
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <div>
-              <Label className="text-gray-700">Deliveries (L)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={inventoryForm.deliveries}
-                onChange={(e) => setInventoryForm({ ...inventoryForm, deliveries: e.target.value })}
-                placeholder="0.00"
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <div>
-              <Label className="text-gray-700">Closing Stock (L)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={inventoryForm.closing_stock}
-                onChange={(e) => setInventoryForm({ ...inventoryForm, closing_stock: e.target.value })}
-                required
-                className="bg-white text-gray-900"
-              />
-            </div>
-            <Button 
-              type="submit" 
-              className="w-full" 
-              style={{ backgroundColor: '#0B2265' }}
-              disabled={submitting}
-            >
-              {submitting ? 'Saving...' : 'Save Inventory'}
-            </Button>
+                {submitting ? 'Saving...' : 'Update Inventory'}
+              </Button>
+            </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Quick Actions Sheet */}
+      <Sheet open={showQuickActions} onOpenChange={setShowQuickActions}>
+        <SheetContent side="bottom" className="rounded-t-2xl">
+          <SheetHeader>
+            <SheetTitle>Quick Actions</SheetTitle>
+          </SheetHeader>
+          <div className="grid grid-cols-3 gap-3 py-4">
+            <MobileQuickAction
+              icon={Building2}
+              label="Station Check"
+              onClick={() => {}}
+              variant="default"
+            />
+            <MobileQuickAction
+              icon={Fuel}
+              label="Tank Dipping"
+              onClick={() => {}}
+              variant="default"
+            />
+            <MobileQuickAction
+              icon={Calculator}
+              label="Calculators"
+              onClick={() => {}}
+              variant="default"
+            />
+            <MobileQuickAction
+              icon={ClipboardList}
+              label="Daily Report"
+              onClick={() => {}}
+              variant="default"
+            />
+            <MobileQuickAction
+              icon={Users}
+              label="Staff Management"
+              onClick={() => {}}
+              variant="default"
+            />
+            <MobileQuickAction
+              icon={BarChart}
+              label="Analytics"
+              onClick={() => {}}
+              variant="default"
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Notifications Sheet */}
+      <Sheet open={showNotifications} onOpenChange={setShowNotifications}>
+        <SheetContent side="right" className="w-full max-w-sm">
+          <SheetHeader>
+            <SheetTitle>Notifications</SheetTitle>
+          </SheetHeader>
+          <div className="py-4">
+            {/* Notifications content */}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

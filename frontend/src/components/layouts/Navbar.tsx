@@ -1,5 +1,6 @@
 // components/layouts/Navbar.tsx
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom'; // Added Link import
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../ui/button';
 import { 
@@ -75,6 +76,31 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
         </div>
       </div>
 
+      {/* Mobile Navigation Links */}
+      <div className="space-y-2 px-4">
+        <Button
+          variant="outline"
+          className="w-full justify-start gap-2"
+          asChild
+        >
+          <Link to="/notifications" onClick={() => setMobileMenuOpen(false)}>
+            <Bell className="w-4 h-4" />
+            Notifications
+          </Link>
+        </Button>
+        
+        <Button
+          variant="outline"
+          className="w-full justify-start gap-2"
+          asChild
+        >
+          <Link to="/settings" onClick={() => setMobileMenuOpen(false)}>
+            <Settings className="w-4 h-4" />
+            Settings
+          </Link>
+        </Button>
+      </div>
+
       {/* View Switcher for Station Manager */}
       {user?.role === 'station_manager' && onViewChange && (
         <div className="space-y-2 px-4">
@@ -108,7 +134,7 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
         </div>
       )}
 
-      {/* Actions */}
+      {/* Help Tour */}
       <div className="space-y-2 px-4">
         <Button
           variant="outline"
@@ -120,18 +146,6 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
         >
           <HelpCircle className="w-4 h-4" />
           Help Tour
-        </Button>
-        
-        <Button
-          variant="outline"
-          onClick={() => setMobileMenuOpen(false)}
-          className="w-full justify-start gap-2"
-          asChild
-        >
-          <a href="/settings">
-            <Settings className="w-4 h-4" />
-            Settings
-          </a>
         </Button>
       </div>
 
@@ -215,10 +229,12 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
             <ThemeToggle />
           </div>
 
-          {/* Notifications */}
-          <Button variant="ghost" size="sm" className="relative h-9 w-9 p-0">
-            <Bell className="w-4 h-4" />
-            <span className="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full"></span>
+          {/* Notifications - FIXED: Added Link wrapper */}
+          <Button variant="ghost" size="sm" className="relative h-9 w-9 p-0" asChild>
+            <Link to="/notifications">
+              <Bell className="w-4 h-4" />
+              <span className="absolute -top-1 -right-1 h-2 w-2 bg-red-500 rounded-full"></span>
+            </Link>
           </Button>
 
           {/* Help Tour - Desktop */}
@@ -254,16 +270,22 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
                 <DropdownMenuLabel>My Account</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
-                  <a href="/settings/profile" className="w-full flex items-center gap-2 cursor-pointer">
+                  <Link to="/settings/profile" className="w-full flex items-center gap-2 cursor-pointer">
                     <User className="w-4 h-4" />
                     Profile
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <a href="/settings" className="w-full flex items-center gap-2 cursor-pointer">
+                  <Link to="/notifications" className="w-full flex items-center gap-2 cursor-pointer">
+                    <Bell className="w-4 h-4" />
+                    Notifications
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/settings" className="w-full flex items-center gap-2 cursor-pointer">
                     <Settings className="w-4 h-4" />
                     Settings
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem 
@@ -287,6 +309,19 @@ export function Navbar({ onViewChange, currentView }: NavbarProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Account</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/notifications" className="w-full flex items-center gap-2 cursor-pointer">
+                    <Bell className="w-4 h-4 mr-2" />
+                    Notifications
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/settings" className="w-full flex items-center gap-2 cursor-pointer">
+                    <Settings className="w-4 h-4 mr-2" />
+                    Settings
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleLogout} className="text-red-600">
                   <LogOut className="w-4 h-4 mr-2" />

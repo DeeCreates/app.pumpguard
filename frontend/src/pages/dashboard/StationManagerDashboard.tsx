@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense, useCallback, useRef } from "react";
+import React, { useState, useEffect, lazy, Suspense, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePrices } from "../../contexts/PriceContext";
@@ -54,6 +54,9 @@ import {
   Gauge,
   Database,
   BanknoteIcon,
+  Search,
+  Filter,
+  MoreHorizontal,
 } from "lucide-react";
 import { offlineSync } from "../../utils/offline-sync";
 
@@ -63,6 +66,7 @@ const LazyShiftManagement = lazy(() => import('../../pages/operations/ShiftManag
 const LazyPumpCalibration = lazy(() => import('../../pages/operations/PumpCalibration'));
 const LazyBankDeposits = lazy(() => import('../../pages/financial/BankDeposits'));
 
+// Types
 interface DailyReport {
   total_sales: number;
   total_expenses: number;
@@ -115,7 +119,6 @@ interface Product {
   unit: string;
 }
 
-// UPDATED: Correct Pump interface based on your actual table structure
 interface Pump {
   id: string;
   station_id: string;
@@ -142,7 +145,7 @@ interface InventoryHistory {
   product_id: string;
   opening_stock: number;
   closing_stock: number;
-  deliveries: number;
+  received: number;
   stock_date: string;
   recorded_by: string;
   created_at: string;
@@ -167,9 +170,175 @@ interface Bank {
   created_at: string;
 }
 
-// Form Separator Component
-const FormSection = ({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) => (
-  <div className="space-y-4">
+interface Station {
+  id: string;
+  name: string;
+  omc_id: string;
+  omc?: {
+    id: string;
+    name: string;
+  };
+}
+
+interface LoadingStates {
+  sales: boolean;
+  expenses: boolean;
+  inventory: boolean;
+  pumps: boolean;
+  prices: boolean;
+  banks: boolean;
+  dailyReport: boolean;
+  station: boolean;
+}
+
+interface DashboardConfig {
+  autoRefresh: boolean;
+  refreshInterval: number;
+  defaultView: string;
+  showNotifications: boolean;
+}
+
+// Utility functions
+const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
+const exportToCSV = (data: any[], filename: string) => {
+  if (!data.length) {
+    toast.error('No data to export');
+    return;
+  }
+
+  try {
+    const headers = Object.keys(data[0]).join(',');
+    const csv = [headers, ...data.map(row => 
+      Object.values(row).map(value => 
+        typeof value === 'string' && value.includes(',') ? `"${value}"` : value
+      ).join(',')
+    )].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${filename}-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    toast.success('Export completed successfully');
+  } catch (error) {
+    console.error('Export failed:', error);
+    toast.error('Failed to export data');
+  }
+};
+
+const handleApiError = (error: any, operation: string) => {
+  console.error(`❌ ${operation} failed:`, error);
+  
+  if (error.code === 'PGRST301' || error.message?.includes('fetch')) {
+    toast.error('Network error. Please check your connection.');
+  } else if (error.code === '42501') {
+    toast.error('Permission denied. Please contact administrator.');
+  } else if (error.message?.includes('JWT')) {
+    toast.error('Session expired. Please login again.');
+  } else if (error.code === '23505') {
+    toast.error('Duplicate entry. This record already exists.');
+  } else if (error.code === '23503') {
+    toast.error('Reference error. Related record not found.');
+  } else {
+    toast.error(`${operation} failed: ${error.message || 'Unknown error'}`);
+  }
+};
+
+// Form validation functions
+const validateSalesForm = (form: any, pumps: Pump[]): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.pump_id) errors.push('Pump selection is required');
+  if (!form.opening_meter) errors.push('Opening meter is required');
+  if (!form.closing_meter) errors.push('Closing meter is required');
+  
+  const opening = parseFloat(form.opening_meter);
+  const closing = parseFloat(form.closing_meter);
+  
+  if (isNaN(opening) || isNaN(closing)) {
+    errors.push('Please enter valid meter readings');
+    return errors;
+  }
+  
+  if (closing < opening) errors.push('Closing meter cannot be less than opening meter');
+  if (closing - opening > 10000) errors.push('Unrealistic volume detected');
+  
+  const selectedPump = pumps.find(p => p.id === form.pump_id);
+  if (selectedPump && opening < selectedPump.current_meter_reading) {
+    errors.push(`Opening meter cannot be less than current pump reading (${selectedPump.current_meter_reading}L)`);
+  }
+  
+  return errors;
+};
+
+const validateExpenseForm = (form: any): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.description?.trim()) errors.push('Description is required');
+  if (!form.amount || parseFloat(form.amount) <= 0) errors.push('Valid amount is required');
+  if (!form.expense_date) errors.push('Date is required');
+  
+  const amount = parseFloat(form.amount);
+  if (amount > 1000000) errors.push('Amount seems too high. Please verify.');
+  
+  return errors;
+};
+
+const validateInventoryForm = (form: any): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.product_id) errors.push('Product selection is required');
+  if (!form.opening_stock && form.opening_stock !== '0') errors.push('Opening stock is required');
+  if (!form.closing_stock && form.closing_stock !== '0') errors.push('Closing stock is required');
+  
+  const opening = parseFloat(form.opening_stock);
+  const closing = parseFloat(form.closing_stock);
+  const received = parseFloat(form.received) || 0;
+  
+  if (isNaN(opening) || isNaN(closing)) {
+    errors.push('Please enter valid stock values');
+    return errors;
+  }
+  
+  if (closing < 0) errors.push('Closing stock cannot be negative');
+  if (opening < 0) errors.push('Opening stock cannot be negative');
+  if (received < 0) errors.push('Received quantity cannot be negative');
+  
+  const expectedClosing = opening + received;
+  if (Math.abs(closing - expectedClosing) > expectedClosing * 0.1) {
+    errors.push('Closing stock differs significantly from expected value. Please verify.');
+  }
+  
+  return errors;
+};
+
+// Components
+const FormSection = ({ 
+  title, 
+  description, 
+  children,
+  className = ""
+}: { 
+  title: string; 
+  description?: string; 
+  children: React.ReactNode;
+  className?: string;
+}) => (
+  <div className={`space-y-4 ${className}`}>
     <div className="border-b border-gray-200 pb-4">
       <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
       {description && <p className="text-sm text-gray-600 mt-1">{description}</p>}
@@ -180,13 +349,79 @@ const FormSection = ({ title, description, children }: { title: string; descript
   </div>
 );
 
-// Scrollable Dialog Content Component
-const ScrollableDialogContent = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
-  <div className={`max-h-[70vh] overflow-y-auto ${className}`}>
+const ScrollableDialogContent = ({ 
+  children, 
+  className = "",
+  maxHeight = "70vh"
+}: { 
+  children: React.ReactNode; 
+  className?: string;
+  maxHeight?: string;
+}) => (
+  <div 
+    className={`overflow-y-auto ${className}`}
+    style={{ maxHeight }}
+  >
     {children}
   </div>
 );
 
+const StatusBadge = ({ status, type }: { status?: string; type?: string }) => {
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'approved': return 'bg-green-100 text-green-800 border-green-200';
+      case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'rejected': return 'bg-red-100 text-red-800 border-red-200';
+      case 'active': return 'bg-green-100 text-green-800 border-green-200';
+      case 'inactive': return 'bg-gray-100 text-gray-800 border-gray-200';
+      case 'maintenance': return 'bg-orange-100 text-orange-800 border-orange-200';
+      default: return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
+  const getTypeColor = (type: string) => {
+    switch (type) {
+      case 'operational': return 'bg-blue-100 text-blue-800';
+      case 'fixed': return 'bg-purple-100 text-purple-800';
+      case 'staff': return 'bg-orange-100 text-orange-800';
+      case 'maintenance': return 'bg-cyan-100 text-cyan-800';
+      case 'other': return 'bg-gray-100 text-gray-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  if (status) {
+    return (
+      <span className={`text-xs px-2 py-1 rounded-full border ${getStatusColor(status)}`}>
+        {status}
+      </span>
+    );
+  }
+
+  if (type) {
+    return (
+      <span className={`text-xs px-2 py-1 rounded-full ${getTypeColor(type)}`}>
+        {type}
+      </span>
+    );
+  }
+
+  return null;
+};
+
+const DataTableSkeleton = ({ rows = 5, columns = 4 }: { rows?: number; columns?: number }) => (
+  <div className="space-y-3">
+    {Array.from({ length: rows }).map((_, i) => (
+      <div key={i} className="flex gap-4 items-center">
+        {Array.from({ length: columns }).map((_, j) => (
+          <Skeleton key={j} className="h-12 flex-1" />
+        ))}
+      </div>
+    ))}
+  </div>
+);
+
+// Main Dashboard Component
 export function StationManagerDashboard() {
   const { user } = useAuth();
   const { 
@@ -196,23 +431,23 @@ export function StationManagerDashboard() {
     refreshPrices 
   } = usePrices();
   
+  // State management
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSync, setPendingSync] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('operations');
   const [pumpPrices, setPumpPrices] = useState<PumpPrice[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [station, setStation] = useState<Station | null>(null);
   
-  // New state for pumps, inventory, and banks
+  // Data states
   const [pumps, setPumps] = useState<Pump[]>([]);
   const [selectedPump, setSelectedPump] = useState<Pump | null>(null);
   const [inventoryHistory, setInventoryHistory] = useState<InventoryHistory[]>([]);
   const [fuelStockCard, setFuelStockCard] = useState<FuelStockCard[]>([]);
   const [banks, setBanks] = useState<Bank[]>([]);
-  const [showBankDialog, setShowBankDialog] = useState(false);
-  
-  // Expense state
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [expenseStats, setExpenseStats] = useState<ExpenseStats>({
     total_expenses: 0,
@@ -224,14 +459,36 @@ export function StationManagerDashboard() {
     pending_approval: 0
   });
   
+  // Loading states
+  const [loadingStates, setLoadingStates] = useState<LoadingStates>({
+    sales: false,
+    expenses: false,
+    inventory: false,
+    pumps: false,
+    prices: false,
+    banks: false,
+    dailyReport: false,
+    station: false
+  });
+
+  // Configuration
+  const [dashboardConfig, setDashboardConfig] = useState<DashboardConfig>({
+    autoRefresh: true,
+    refreshInterval: 30000,
+    defaultView: 'operations',
+    showNotifications: true
+  });
+
   // Dialog states
   const [showSalesDialog, setShowSalesDialog] = useState(false);
   const [showExpenseDialog, setShowExpenseDialog] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
   const [showTankDippingDialog, setShowTankDippingDialog] = useState(false);
   const [showStationCheckDialog, setShowStationCheckDialog] = useState(false);
+  const [showBankDialog, setShowBankDialog] = useState(false);
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
-  // Form states - Updated for pump-based sales
+  // Form states
   const [salesForm, setSalesForm] = useState({
     pump_id: '',
     product_type: 'Petrol',
@@ -257,7 +514,7 @@ export function StationManagerDashboard() {
     product_type: 'Petrol',
     product_id: '',
     opening_stock: '',
-    deliveries: '',
+    received: '',
     closing_stock: '',
     date: new Date().toISOString().split('T')[0]
   });
@@ -289,30 +546,75 @@ export function StationManagerDashboard() {
     is_active: true
   });
 
-  // Load products for dropdowns
   const [products, setProducts] = useState<Product[]>([]);
 
-  // Refs to prevent multiple initializations
+  // Refs
   const initializedRef = useRef(false);
   const syncIntervalRef = useRef<NodeJS.Timeout>();
   const priceLoadAttemptedRef = useRef(false);
+  const realtimeSubscriptionRef = useRef<any>(null);
 
-  // FIXED: Load pumps from database with correct column names
+  // Loading state helpers
+  const setLoading = useCallback((key: keyof LoadingStates, loading: boolean) => {
+    setLoadingStates(prev => ({ ...prev, [key]: loading }));
+  }, []);
+
+  const isLoading = useCallback(() => {
+    return Object.values(loadingStates).some(state => state);
+  }, [loadingStates]);
+
+  // Data loading functions
+  const loadStation = useCallback(async () => {
+    if (!user?.station_id) {
+      console.log('❌ No station ID available');
+      return;
+    }
+    
+    setLoading('station', true);
+    try {
+      console.log('🔄 Loading station details...');
+      
+      const { data, error } = await supabase
+        .from('stations')
+        .select(`
+          *,
+          omc:omc_id (
+            id,
+            name
+          )
+        `)
+        .eq('id', user.station_id)
+        .single();
+
+      if (error) {
+        console.error('❌ Station fetch error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Station loaded:', data);
+      setStation(data);
+    } catch (error: any) {
+      console.error('❌ Failed to load station:', error);
+      handleApiError(error, 'Loading station');
+    } finally {
+      setLoading('station', false);
+    }
+  }, [user?.station_id, setLoading]);
+
   const loadPumps = useCallback(async () => {
     if (!user?.station_id) {
       console.log('❌ No station ID available');
       return;
     }
     
+    setLoading('pumps', true);
     try {
       console.log('🔄 Loading pumps for station:', user.station_id);
       
-      // Use the exact column names from your table
       const { data, error } = await supabase
         .from('pumps')
         .select('*')
         .eq('station_id', user.station_id)
-        .eq('status', 'active')
         .order('number');
 
       if (error) {
@@ -324,12 +626,10 @@ export function StationManagerDashboard() {
       const pumpsData = data || [];
       setPumps(pumpsData);
       
-      // Set default pump
       if (pumpsData.length > 0) {
         const defaultPump = pumpsData[0];
         setSelectedPump(defaultPump);
         
-        // Find matching product for this fuel type
         const matchingProduct = products.find(p => 
           p.name.toLowerCase() === defaultPump.fuel_type?.toLowerCase()
         );
@@ -347,120 +647,15 @@ export function StationManagerDashboard() {
       }
     } catch (error: any) {
       console.error('❌ Failed to load pumps:', error);
-      
-      // More specific error handling
-      if (error.code === '42P01') {
-        console.error('Pumps table does not exist');
-        toast.error('Pumps table not configured. Please contact administrator.');
-      } else if (error.message?.includes('does not exist')) {
-        toast.error('Pumps table not found. Please check database setup.');
-      } else {
-        toast.error('Failed to load pump data: ' + (error.message || 'Unknown error'));
-      }
-      
-      // Set empty pumps array to prevent further errors
+      handleApiError(error, 'Loading pumps');
       setPumps([]);
-    }
-  }, [user?.station_id, products]);
-
-  // Debug function to check pumps table
-  const debugPumpsTable = async () => {
-    if (!user?.station_id) return;
-    
-    try {
-      console.log('🔍 Debugging pumps table...');
-      
-      // Check if pumps table exists and get sample data
-      const { data, error } = await supabase
-        .from('pumps')
-        .select('*')
-        .eq('station_id', user.station_id)
-        .limit(5);
-
-      if (error) {
-        console.error('❌ Debug query error:', error);
-        toast.error(`Pumps table error: ${error.message}`);
-        return;
-      }
-
-      console.log('🔍 Pumps table sample data:', data);
-      
-      if (data && data.length > 0) {
-        toast.success(`Found ${data.length} pumps. Check console for details.`);
-      } else {
-        toast.info('No pumps found for this station. Please add pumps first.');
-      }
-    } catch (error: any) {
-      console.error('❌ Debug failed:', error);
-      toast.error('Debug failed: ' + error.message);
-    }
-  };
-
-  // Load banks
-  const loadBanks = useCallback(async () => {
-    if (!user?.station_id) return;
-
-    try {
-      console.log('🔄 Loading banks...');
-      const { data, error } = await supabase
-        .from('banks')
-        .select('*')
-        .eq('station_id', user.station_id)
-        .eq('is_active', true)
-        .order('name');
-
-      if (error) throw error;
-      
-      setBanks(data || []);
-    } catch (error) {
-      console.error('Failed to load banks:', error);
-    }
-  }, [user?.station_id]);
-
-  // Add new bank
-  const handleAddBank = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.station_id) return;
-
-    setSubmitting(true);
-    const bankData = {
-      station_id: user.station_id,
-      name: bankForm.name,
-      account_number: bankForm.account_number,
-      branch: bankForm.branch,
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    try {
-      const { data, error } = await supabase
-        .from('banks')
-        .insert([bankData])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      toast.success('Bank added successfully!');
-      setShowBankDialog(false);
-      setBankForm({
-        name: '',
-        account_number: '',
-        branch: '',
-        is_active: true
-      });
-      await loadBanks();
-    } catch (error: any) {
-      console.error('Failed to add bank:', error);
-      toast.error(`Failed to add bank: ${error.message}`);
     } finally {
-      setSubmitting(false);
+      setLoading('pumps', false);
     }
-  };
+  }, [user?.station_id, products, setLoading]);
 
-  // Load products from database
   const loadProducts = useCallback(async () => {
+    setLoading('inventory', true);
     try {
       console.log('🔄 Loading products...');
       const { data, error } = await supabase
@@ -470,7 +665,6 @@ export function StationManagerDashboard() {
 
       if (error) {
         console.error('Product fetch error:', error);
-        // Use fallback products
         const fallbackProducts: Product[] = [
           { id: 'petrol', name: 'Petrol', unit: 'L' },
           { id: 'diesel', name: 'Diesel', unit: 'L' },
@@ -484,7 +678,6 @@ export function StationManagerDashboard() {
       console.log('✅ Products loaded:', productsData);
       setProducts(productsData);
       
-      // Set default product in forms if no pumps available
       if (productsData.length > 0 && pumps.length === 0) {
         const defaultProduct = productsData[0];
         setSalesForm(prev => ({ 
@@ -505,24 +698,24 @@ export function StationManagerDashboard() {
       }
     } catch (error) {
       console.error('Failed to load products:', error);
-      // Fallback products
       const fallbackProducts: Product[] = [
         { id: 'petrol', name: 'Petrol', unit: 'L' },
         { id: 'diesel', name: 'Diesel', unit: 'L' },
         { id: 'lpg', name: 'LPG', unit: 'kg' }
       ];
       setProducts(fallbackProducts);
+    } finally {
+      setLoading('inventory', false);
     }
-  }, [pumps.length]);
+  }, [pumps.length, setLoading]);
 
-  // Load current pump prices from Price Context with retry logic
   const loadPumpPrices = useCallback(async (forceRefresh = false) => {
     if (!user?.station_id) return;
     
+    setLoading('prices', true);
     try {
       console.log('🔄 Loading pump prices...');
       
-      // Force refresh prices if requested
       if (forceRefresh) {
         await refreshPrices();
       }
@@ -530,12 +723,10 @@ export function StationManagerDashboard() {
       const stationAllPrices = getStationAllPrices(user.station_id);
       console.log('✅ Station prices:', stationAllPrices);
       
-      // If no prices found and we haven't attempted to load yet, try refreshing
       if (stationAllPrices.length === 0 && !priceLoadAttemptedRef.current) {
         console.log('🔄 No prices found, attempting refresh...');
         priceLoadAttemptedRef.current = true;
         await refreshPrices();
-        // Try again after refresh
         const refreshedPrices = getStationAllPrices(user.station_id);
         
         const transformedPrices: PumpPrice[] = refreshedPrices.map(price => ({
@@ -547,7 +738,6 @@ export function StationManagerDashboard() {
 
         setPumpPrices(transformedPrices);
         
-        // Update forms with current prices
         if (transformedPrices.length > 0) {
           const currentPrice = transformedPrices[0];
           setSalesForm(prev => ({
@@ -567,7 +757,6 @@ export function StationManagerDashboard() {
 
         setPumpPrices(transformedPrices);
         
-        // Update forms with current prices
         if (transformedPrices.length > 0) {
           const currentPrice = transformedPrices[0];
           setSalesForm(prev => ({
@@ -580,20 +769,44 @@ export function StationManagerDashboard() {
       }
     } catch (error) {
       console.error('Failed to load pump prices:', error);
-      // Fallback prices
       const fallbackPrices: PumpPrice[] = [
         { product_type: 'Petrol', product_id: 'petrol', price_per_liter: 12.50, last_updated: new Date().toISOString() },
         { product_type: 'Diesel', product_id: 'diesel', price_per_liter: 11.80, last_updated: new Date().toISOString() },
         { product_type: 'LPG', product_id: 'lpg', price_per_liter: 8.90, last_updated: new Date().toISOString() }
       ];
       setPumpPrices(fallbackPrices);
+    } finally {
+      setLoading('prices', false);
     }
-  }, [user?.station_id, getStationAllPrices, refreshPrices]);
+  }, [user?.station_id, getStationAllPrices, refreshPrices, setLoading]);
 
-  // Load inventory history (last 15 days)
+  const loadBanks = useCallback(async () => {
+    if (!user?.station_id) return;
+
+    setLoading('banks', true);
+    try {
+      console.log('🔄 Loading banks...');
+      const { data, error } = await supabase
+        .from('banks')
+        .select('*')
+        .eq('station_id', user.station_id)
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) throw error;
+      
+      setBanks(data || []);
+    } catch (error) {
+      console.error('Failed to load banks:', error);
+    } finally {
+      setLoading('banks', false);
+    }
+  }, [user?.station_id, setLoading]);
+
   const loadInventoryHistory = useCallback(async () => {
     if (!user?.station_id) return;
 
+    setLoading('inventory', true);
     try {
       console.log('🔄 Loading inventory history...');
       const fifteenDaysAgo = new Date();
@@ -615,17 +828,18 @@ export function StationManagerDashboard() {
     } catch (error) {
       console.error('Failed to load inventory history:', error);
       toast.error('Failed to load inventory history');
+    } finally {
+      setLoading('inventory', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
 
-  // Load current fuel stock card
   const loadFuelStockCard = useCallback(async () => {
     if (!user?.station_id) return;
 
+    setLoading('inventory', true);
     try {
       console.log('🔄 Loading fuel stock card...');
       
-      // Get the latest stock entry for each product
       const { data: latestStocks, error } = await supabase
         .from('daily_tank_stocks')
         .select(`
@@ -642,7 +856,6 @@ export function StationManagerDashboard() {
 
       if (error) throw error;
 
-      // Group by product_id and take the latest entry for each product
       const productMap = new Map();
       latestStocks?.forEach(stock => {
         if (!productMap.has(stock.product_id)) {
@@ -660,48 +873,15 @@ export function StationManagerDashboard() {
       setFuelStockCard(uniqueStocks);
     } catch (error) {
       console.error('Failed to load fuel stock card:', error);
+    } finally {
+      setLoading('inventory', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
 
-  // Calculate sales amount automatically using meter readings and real prices
-  const calculateSalesAmount = useCallback((openingMeter: string, closingMeter: string, productId: string) => {
-    console.log('🔄 Calculating sales amount:', { openingMeter, closingMeter, productId });
-    
-    if (!openingMeter || !closingMeter) {
-      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
-      return;
-    }
-
-    const opening = parseFloat(openingMeter);
-    const closing = parseFloat(closingMeter);
-    
-    if (isNaN(opening) || isNaN(closing)) {
-      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
-      return;
-    }
-    
-    if (closing < opening) {
-      toast.error('Closing meter cannot be less than opening meter');
-      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
-      return;
-    }
-
-    const volume = closing - opening;
-    const price = getStationPrice(user?.station_id || '', productId) || 0;
-    const calculatedAmount = volume * price;
-    
-    console.log('✅ Sales calculation:', { volume, price, calculatedAmount });
-    
-    setSalesForm(prev => ({
-      ...prev,
-      calculated_amount: calculatedAmount.toFixed(2)
-    }));
-  }, [user?.station_id, getStationPrice]);
-
-  // Load expenses with real data
   const loadExpenses = useCallback(async () => {
     if (!user?.station_id) return;
 
+    setLoading('expenses', true);
     try {
       console.log('🔄 Loading expenses...');
       const { data, error } = await supabase
@@ -709,7 +889,7 @@ export function StationManagerDashboard() {
         .select('*')
         .eq('station_id', user.station_id)
         .order('expense_date', { ascending: false })
-        .limit(10);
+        .limit(50);
 
       if (error) {
         console.error('Failed to load expenses:', error);
@@ -722,8 +902,10 @@ export function StationManagerDashboard() {
     } catch (error) {
       console.error('Error loading expenses:', error);
       setExpenses([]);
+    } finally {
+      setLoading('expenses', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
 
   const calculateExpenseStats = useCallback((expenseData: Expense[]) => {
     const stats: ExpenseStats = {
@@ -762,11 +944,10 @@ export function StationManagerDashboard() {
     setExpenseStats(stats);
   }, []);
 
-  // Load daily report with real data
   const loadDailyReport = useCallback(async () => {
     if (!user?.station_id) return;
     
-    setLoading(true);
+    setLoading('dailyReport', true);
     try {
       console.log('🔄 Loading daily report...');
       const today = new Date().toISOString().split('T')[0];
@@ -840,9 +1021,44 @@ export function StationManagerDashboard() {
       console.error('Failed to load daily report:', error);
       toast.error('Failed to load dashboard data');
     } finally {
-      setLoading(false);
+      setLoading('dailyReport', false);
     }
-  }, [user?.station_id, pumpPrices, fuelStockCard]);
+  }, [user?.station_id, pumpPrices, fuelStockCard, setLoading]);
+
+  // Calculation and sync functions
+  const calculateSalesAmount = useCallback((openingMeter: string, closingMeter: string, productId: string) => {
+    console.log('🔄 Calculating sales amount:', { openingMeter, closingMeter, productId });
+    
+    if (!openingMeter || !closingMeter) {
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+
+    const opening = parseFloat(openingMeter);
+    const closing = parseFloat(closingMeter);
+    
+    if (isNaN(opening) || isNaN(closing)) {
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+    
+    if (closing < opening) {
+      toast.error('Closing meter cannot be less than opening meter');
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+
+    const volume = closing - opening;
+    const price = getStationPrice(user?.station_id || '', productId) || 0;
+    const calculatedAmount = volume * price;
+    
+    console.log('✅ Sales calculation:', { volume, price, calculatedAmount });
+    
+    setSalesForm(prev => ({
+      ...prev,
+      calculated_amount: calculatedAmount.toFixed(2)
+    }));
+  }, [user?.station_id, getStationPrice]);
 
   const updatePendingCount = useCallback(async () => {
     try {
@@ -873,136 +1089,104 @@ export function StationManagerDashboard() {
     }
   }, [loadDailyReport, loadExpenses, updatePendingCount, refreshPrices]);
 
-// FIXED: Sales recording function matching your exact schema
-const handleRecordSales = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!user?.station_id || !salesForm.pump_id) {
-    toast.error('Please select a pump');
-    return;
-  }
+  // Form handlers
+  const handleRecordSales = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id || !salesForm.pump_id) {
+      toast.error('Please select a pump');
+      return;
+    }
 
-  if (!salesForm.opening_meter || !salesForm.closing_meter) {
-    toast.error('Please enter both opening and closing meter readings');
-    return;
-  }
+    const validationErrors = validateSalesForm(salesForm, pumps);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
+      return;
+    }
 
-  const opening = parseFloat(salesForm.opening_meter);
-  const closing = parseFloat(salesForm.closing_meter);
-  
-  if (isNaN(opening) || isNaN(closing)) {
-    toast.error('Please enter valid meter readings');
-    return;
-  }
-  
-  if (closing < opening) {
-    toast.error('Closing meter cannot be less than opening meter');
-    return;
-  }
-
-  setSubmitting(true);
-  
-  const price = getStationPrice(user.station_id, salesForm.product_id) || 0;
-  const volume = closing - opening;
-  const calculatedAmount = volume * price;
-  
-  // Get the selected pump to extract pump_number
-  const selectedPump = pumps.find(p => p.id === salesForm.pump_id);
-  
-  if (!selectedPump) {
-    toast.error('Selected pump not found');
-    setSubmitting(false);
-    return;
-  }
-
-  // Convert pump number from string to integer
-  const pumpNumber = parseInt(selectedPump.number) || 1;
-
-  // FIXED: Sales data matching your exact schema
-  const salesData = {
-    // Required fields
-    station_id: user.station_id,
-    pump_id: salesForm.pump_id,
-    pump_number: pumpNumber, // INTEGER and REQUIRED
-    opening_meter: opening,
-    closing_meter: closing,
-    unit_price: price,
-    total_amount: calculatedAmount, // Has default but can be provided
-    cash_received: calculatedAmount, // REQUIRED field
-    payment_method: 'cash', // REQUIRED - from USER-DEFINED type
+    setSubmitting(true);
     
-    // Optional but recommended fields
-    product_id: salesForm.product_id,
-    created_by: user.id,
-    customer_type: 'retail',
+    const opening = parseFloat(salesForm.opening_meter);
+    const closing = parseFloat(salesForm.closing_meter);
+    const price = getStationPrice(user.station_id, salesForm.product_id) || 0;
+    const volume = closing - opening;
+    const calculatedAmount = volume * price;
     
-    // Generated columns - DO NOT include these:
-    // litres_sold: volume, // ← GENERATED COLUMN - don't include!
-    // variance: 0, // ← GENERATED COLUMN - don't include!
+    const selectedPump = pumps.find(p => p.id === salesForm.pump_id);
     
-    // Other optional fields
-    transaction_time: new Date().toISOString(),
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
+    if (!selectedPump) {
+      toast.error('Selected pump not found');
+      setSubmitting(false);
+      return;
+    }
 
-  console.log('📝 Recording sale with schema-compliant data:', salesData);
+    const pumpNumber = parseInt(selectedPump.number) || 1;
 
-  try {
-    if (isOnline) {
-      const { error } = await supabase
-        .from('sales')
-        .insert([salesData]);
+    const salesData = {
+      station_id: user.station_id,
+      pump_id: salesForm.pump_id,
+      pump_number: pumpNumber,
+      opening_meter: opening,
+      closing_meter: closing,
+      unit_price: price,
+      total_amount: calculatedAmount,
+      cash_received: calculatedAmount,
+      payment_method: 'cash',
+      product_id: salesForm.product_id,
+      created_by: user.id,
+      customer_type: 'retail',
+      transaction_time: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
 
-      if (error) throw error;
+    console.log('📝 Recording sale:', salesData);
 
-      // Update pump meter reading
-      const { error: pumpError } = await supabase
-        .from('pumps')
-        .update({ 
-          current_meter_reading: closing,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', salesForm.pump_id);
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('sales')
+          .insert([salesData]);
 
-      if (pumpError) {
-        console.error('Pump update error:', pumpError);
+        if (error) throw error;
+
+        const { error: pumpError } = await supabase
+          .from('pumps')
+          .update({ 
+            current_meter_reading: closing,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', salesForm.pump_id);
+
+        if (pumpError) {
+          console.error('Pump update error:', pumpError);
+        }
+
+        toast.success(`Sale recorded successfully! ${volume.toFixed(2)}L = ₵${calculatedAmount.toFixed(2)}`);
+      } else {
+        await offlineSync.addToQueue('create', 'sales', salesData);
+        await updatePendingCount();
+        toast.success('Sale queued for sync (offline mode)');
       }
-
-      toast.success(`Sale recorded successfully! ${volume.toFixed(2)}L = ₵${calculatedAmount.toFixed(2)}`);
-    } else {
-      await offlineSync.addToQueue('create', 'sales', salesData);
-      await updatePendingCount();
-      toast.success('Sale queued for sync (offline mode)');
+      
+      setShowSalesDialog(false);
+      resetSalesForm();
+      await loadDailyReport();
+      await loadPumps();
+    } catch (error: any) {
+      console.error('❌ Failed to record sales:', error);
+      handleApiError(error, 'Recording sale');
+    } finally {
+      setSubmitting(false);
     }
-    
-    setShowSalesDialog(false);
-    resetSalesForm();
-    await loadDailyReport();
-    await loadPumps();
-  } catch (error: any) {
-    console.error('❌ Failed to record sales:', error);
-    
-    // Specific error handling
-    if (error.message?.includes('pump_number')) {
-      toast.error('Invalid pump number format. Please contact administrator.');
-    } else if (error.message?.includes('cash_received')) {
-      toast.error('Cash received amount is required.');
-    } else if (error.message?.includes('payment_method')) {
-      toast.error('Invalid payment method. Please contact administrator.');
-    } else {
-      toast.error(`Failed to record sale: ${error.message}`);
-    }
-  } finally {
-    setSubmitting(false);
-  }
-};
+  };
 
   const handleRecordExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id) return;
 
-    if (!expenseForm.amount || parseFloat(expenseForm.amount) <= 0) {
-      toast.error('Please enter a valid amount');
+    const validationErrors = validateExpenseForm(expenseForm);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
       return;
     }
 
@@ -1046,7 +1230,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
       }
     } catch (error: any) {
       console.error('Failed to record expense:', error);
-      toast.error(`Failed to record expense: ${error.message}`);
+      handleApiError(error, 'Recording expense');
     } finally {
       setSubmitting(false);
     }
@@ -1069,11 +1253,13 @@ const handleRecordSales = async (e: React.FormEvent) => {
       await loadExpenses();
     } catch (error: any) {
       console.error('Failed to update expense:', error);
-      toast.error('Failed to update expense status');
+      handleApiError(error, 'Updating expense status');
     }
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
+    if (!confirm('Are you sure you want to delete this expense?')) return;
+
     try {
       const { error } = await supabase
         .from('expenses')
@@ -1086,17 +1272,17 @@ const handleRecordSales = async (e: React.FormEvent) => {
       await loadExpenses();
     } catch (error: any) {
       console.error('Failed to delete expense:', error);
-      toast.error('Failed to delete expense');
+      handleApiError(error, 'Deleting expense');
     }
   };
 
-  // Fixed Inventory Handler
   const handleInventory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id) return;
 
-    if (!inventoryForm.opening_stock || !inventoryForm.closing_stock) {
-      toast.error('Please fill in opening and closing stock');
+    const validationErrors = validateInventoryForm(inventoryForm);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
       return;
     }
 
@@ -1107,7 +1293,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
       product_id: inventoryForm.product_id,
       opening_stock: parseFloat(inventoryForm.opening_stock) || 0,
       closing_stock: parseFloat(inventoryForm.closing_stock) || 0,
-      deliveries: parseFloat(inventoryForm.deliveries) || 0,
+      received: parseFloat(inventoryForm.received) || 0,
       stock_date: inventoryForm.date,
       recorded_by: user.id,
       notes: "Daily inventory record",
@@ -1143,23 +1329,136 @@ const handleRecordSales = async (e: React.FormEvent) => {
       }
     } catch (error: any) {
       console.error('Failed to record inventory:', error);
-      
-      if (error.code === 'PGRST204') {
-        toast.error('Database schema mismatch. Please refresh the page.');
-      } else if (error.message) {
-        toast.error(`Failed to record inventory: ${error.message}`);
-      } else {
-        toast.error('Failed to record inventory. Please try again.');
-      }
+      handleApiError(error, 'Recording inventory');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // FIXED: Form reset functions
+  const handleStationCheck = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const checkData = {
+      station_id: user.station_id,
+      check_type: stationCheckForm.check_type,
+      safety_equipment: stationCheckForm.safety_equipment,
+      cleanliness: stationCheckForm.cleanliness,
+      equipment_functional: stationCheckForm.equipment_functional,
+      notes: stationCheckForm.notes,
+      check_date: stationCheckForm.date,
+      created_by: user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('station_checks')
+          .insert([checkData]);
+
+        if (error) throw error;
+        toast.success('Station check recorded successfully!');
+      } else {
+        await offlineSync.addToQueue('create', 'station_checks', checkData);
+        await updatePendingCount();
+        toast.success('Station check queued for sync (offline mode)');
+      }
+      
+      setShowStationCheckDialog(false);
+      resetStationCheckForm();
+    } catch (error: any) {
+      console.error('Failed to record station check:', error);
+      handleApiError(error, 'Recording station check');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTankDipping = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const dippingData = {
+      station_id: user.station_id,
+      tank_number: tankDippingForm.tank_number,
+      product_id: tankDippingForm.product_id,
+      dip_reading: parseFloat(tankDippingForm.dip_reading),
+      water_level: parseFloat(tankDippingForm.water_level) || 0,
+      temperature: parseFloat(tankDippingForm.temperature) || 0,
+      dipping_date: tankDippingForm.date,
+      dipping_time: tankDippingForm.time,
+      created_by: user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('tank_dippings')
+          .insert([dippingData]);
+
+        if (error) throw error;
+        toast.success('Tank dipping recorded successfully!');
+      } else {
+        await offlineSync.addToQueue('create', 'tank_dippings', dippingData);
+        await updatePendingCount();
+        toast.success('Tank dipping queued for sync (offline mode)');
+      }
+      
+      setShowTankDippingDialog(false);
+      resetTankDippingForm();
+    } catch (error: any) {
+      console.error('Failed to record tank dipping:', error);
+      handleApiError(error, 'Recording tank dipping');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleAddBank = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const bankData = {
+      station_id: user.station_id,
+      name: bankForm.name,
+      account_number: bankForm.account_number,
+      branch: bankForm.branch,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('banks')
+        .insert([bankData])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      toast.success('Bank added successfully!');
+      setShowBankDialog(false);
+      resetBankForm();
+      await loadBanks();
+    } catch (error: any) {
+      console.error('Failed to add bank:', error);
+      handleApiError(error, 'Adding bank');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Form reset functions
   const resetSalesForm = () => {
     if (selectedPump) {
-      // Find matching product for the pump's fuel type
       const matchingProduct = products.find(p => 
         p.name.toLowerCase() === selectedPump.fuel_type?.toLowerCase()
       );
@@ -1210,7 +1509,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
       product_type: defaultProduct?.name || 'Petrol',
       product_id: defaultProduct?.id || '',
       opening_stock: '',
-      deliveries: '',
+      received: '',
       closing_stock: '',
       date: new Date().toISOString().split('T')[0]
     });
@@ -1250,94 +1549,57 @@ const handleRecordSales = async (e: React.FormEvent) => {
     });
   };
 
-  // Handle station check submission
-  const handleStationCheck = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Debug function
+  const debugPumpsTable = async () => {
     if (!user?.station_id) return;
-
-    setSubmitting(true);
-    const checkData = {
-      station_id: user.station_id,
-      check_type: stationCheckForm.check_type,
-      safety_equipment: stationCheckForm.safety_equipment,
-      cleanliness: stationCheckForm.cleanliness,
-      equipment_functional: stationCheckForm.equipment_functional,
-      notes: stationCheckForm.notes,
-      check_date: stationCheckForm.date,
-      created_by: user.id,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
+    
     try {
-      if (isOnline) {
-        const { error } = await supabase
-          .from('station_checks')
-          .insert([checkData]);
-
-        if (error) throw error;
-        toast.success('Station check recorded successfully!');
-      } else {
-        await offlineSync.addToQueue('create', 'station_checks', checkData);
-        await updatePendingCount();
-        toast.success('Station check queued for sync (offline mode)');
-      }
+      console.log('🔍 Debugging pumps table...');
       
-      setShowStationCheckDialog(false);
-      resetStationCheckForm();
+      const { data, error } = await supabase
+        .from('pumps')
+        .select('*')
+        .eq('station_id', user.station_id)
+        .limit(5);
+
+      if (error) {
+        console.error('❌ Debug query error:', error);
+        toast.error(`Pumps table error: ${error.message}`);
+        return;
+      }
+
+      console.log('🔍 Pumps table sample data:', data);
+      
+      if (data && data.length > 0) {
+        toast.success(`Found ${data.length} pumps. Check console for details.`);
+      } else {
+        toast.info('No pumps found for this station. Please add pumps first.');
+      }
     } catch (error: any) {
-      console.error('Failed to record station check:', error);
-      toast.error(`Failed to record station check: ${error.message}`);
-    } finally {
-      setSubmitting(false);
+      console.error('❌ Debug failed:', error);
+      toast.error('Debug failed: ' + error.message);
     }
   };
 
-  // Handle tank dipping submission
-  const handleTankDipping = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.station_id) return;
-
-    setSubmitting(true);
-    const dippingData = {
-      station_id: user.station_id,
-      tank_number: tankDippingForm.tank_number,
-      product_id: tankDippingForm.product_id,
-      dip_reading: parseFloat(tankDippingForm.dip_reading),
-      water_level: parseFloat(tankDippingForm.water_level) || 0,
-      temperature: parseFloat(tankDippingForm.temperature) || 0,
-      dipping_date: tankDippingForm.date,
-      dipping_time: tankDippingForm.time,
-      created_by: user.id,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    try {
-      if (isOnline) {
-        const { error } = await supabase
-          .from('tank_dippings')
-          .insert([dippingData]);
-
-        if (error) throw error;
-        toast.success('Tank dipping recorded successfully!');
-      } else {
-        await offlineSync.addToQueue('create', 'tank_dippings', dippingData);
-        await updatePendingCount();
-        toast.success('Tank dipping queued for sync (offline mode)');
-      }
-      
-      setShowTankDippingDialog(false);
-      resetTankDippingForm();
-    } catch (error: any) {
-      console.error('Failed to record tank dipping:', error);
-      toast.error(`Failed to record tank dipping: ${error.message}`);
-    } finally {
-      setSubmitting(false);
+  // Filtered data
+  const filteredExpenses = useMemo(() => {
+    let filtered = expenses;
+    
+    if (searchTerm) {
+      filtered = filtered.filter(expense =>
+        expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        expense.category.toLowerCase().includes(searchTerm.toLowerCase())
+      );
     }
-  };
+    
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(expense => expense.status === filterStatus);
+    }
+    
+    return filtered;
+  }, [expenses, searchTerm, filterStatus]);
 
-  // SINGLE INITIALIZATION EFFECT
+  // Effects
   useEffect(() => {
     if (initializedRef.current || !user?.station_id) return;
     
@@ -1347,10 +1609,11 @@ const handleRecordSales = async (e: React.FormEvent) => {
     const initializeDashboard = async () => {
       try {
         await offlineSync.init();
-        await loadProducts(); // Load products first
-        await loadPumps(); // Then load pumps (depends on products)
+        await loadStation();
+        await loadProducts();
+        await loadPumps();
         await loadBanks();
-        await loadPumpPrices(true); // Force refresh prices on login
+        await loadPumpPrices(true);
         await loadInventoryHistory();
         await loadFuelStockCard();
         await loadExpenses();
@@ -1366,21 +1629,69 @@ const handleRecordSales = async (e: React.FormEvent) => {
 
     initializeDashboard();
 
-    // Set up periodic sync (every 2 minutes)
-    syncIntervalRef.current = setInterval(() => {
-      if (isOnline && pendingSync > 0) {
-        syncOfflineData();
-      }
-    }, 2 * 60 * 1000);
+    // Set up periodic sync
+    if (dashboardConfig.autoRefresh) {
+      syncIntervalRef.current = setInterval(() => {
+        if (isOnline && pendingSync > 0) {
+          syncOfflineData();
+        }
+      }, dashboardConfig.refreshInterval);
+    }
 
     return () => {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
       }
     };
+  }, [user?.station_id, dashboardConfig.autoRefresh, dashboardConfig.refreshInterval]);
+
+  // Real-time subscriptions
+  useEffect(() => {
+    if (!user?.station_id) return;
+
+    // Clean up existing subscription
+    if (realtimeSubscriptionRef.current) {
+      realtimeSubscriptionRef.current.unsubscribe();
+    }
+
+    // Subscribe to sales changes
+    realtimeSubscriptionRef.current = supabase
+      .channel('station-dashboard')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales',
+          filter: `station_id=eq.${user.station_id}`
+        },
+        () => {
+          loadDailyReport();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'expenses',
+          filter: `station_id=eq.${user.station_id}`
+        },
+        () => {
+          loadExpenses();
+          loadDailyReport();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeSubscriptionRef.current) {
+        realtimeSubscriptionRef.current.unsubscribe();
+      }
+    };
   }, [user?.station_id]);
 
-  // Network status listeners
+  // Network status
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -1400,24 +1711,22 @@ const handleRecordSales = async (e: React.FormEvent) => {
     };
   }, [syncOfflineData, pendingSync]);
 
-  // FIXED: Update sales calculation when meter readings change
+  // Sales calculation effect
   useEffect(() => {
     if (salesForm.opening_meter && salesForm.closing_meter && salesForm.product_id) {
       calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id);
     }
   }, [salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id, calculateSalesAmount]);
 
-  // FIXED: Update sales form when pump selection changes - COMPLETELY REWRITTEN
+  // Pump selection effect
   useEffect(() => {
     if (selectedPump) {
-      // Find matching product for the pump's fuel type
       const matchingProduct = products.find(p => 
         p.name.toLowerCase() === selectedPump.fuel_type?.toLowerCase()
       );
       
       const currentPrice = getStationPrice(user?.station_id || '', matchingProduct?.id || '') || 0;
       
-      // Use functional update to get current state
       setSalesForm(currentForm => {
         const updatedForm = {
           ...currentForm,
@@ -1428,7 +1737,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
           unit_price: currentPrice.toString()
         };
         
-        // Recalculate amount if closing meter is set
         if (currentForm.closing_meter) {
           const opening = parseFloat(selectedPump.current_meter_reading?.toString() || '0');
           const closing = parseFloat(currentForm.closing_meter);
@@ -1471,27 +1779,32 @@ const handleRecordSales = async (e: React.FormEvent) => {
     </Card>
   );
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved': return 'bg-green-100 text-green-800 border-green-200';
-      case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'rejected': return 'bg-red-100 text-red-800 border-red-200';
-      default: return 'bg-gray-100 text-gray-800 border-gray-200';
+  // Export handlers
+  const handleExportSales = () => {
+    if (!dailyReport?.sales.length) {
+      toast.error('No sales data to export');
+      return;
     }
+    exportToCSV(dailyReport.sales, 'sales-report');
   };
 
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case 'operational': return 'bg-blue-100 text-blue-800';
-      case 'fixed': return 'bg-purple-100 text-purple-800';
-      case 'staff': return 'bg-orange-100 text-orange-800';
-      case 'maintenance': return 'bg-cyan-100 text-cyan-800';
-      case 'other': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-gray-100 text-gray-800';
+  const handleExportExpenses = () => {
+    if (!expenses.length) {
+      toast.error('No expenses data to export');
+      return;
     }
+    exportToCSV(expenses, 'expenses-report');
   };
 
-  if (loading && !dailyReport) {
+  const handleExportInventory = () => {
+    if (!inventoryHistory.length) {
+      toast.error('No inventory data to export');
+      return;
+    }
+    exportToCSV(inventoryHistory, 'inventory-report');
+  };
+
+  if (isLoading() && !dailyReport) {
     return (
       <div className="min-h-screen bg-gray-50 p-6">
         <div className="max-w-7xl mx-auto">
@@ -1520,8 +1833,17 @@ const handleRecordSales = async (e: React.FormEvent) => {
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-4xl text-black mb-2">Station Operations</h1>
-            <p className="text-gray-600">{user?.name} - Daily Operations Management & Staff Supervision</p>
+            <h1 className="text-4xl text-black mb-2">
+              {station?.name || 'Station Operations'}
+            </h1>
+            <div className="flex items-center gap-4 text-gray-600">
+              <p>{user?.name} - Daily Operations Management & Staff Supervision</p>
+              {station?.omc && (
+                <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                  OMC: {station.omc.name}
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {/* Online/Offline Indicator */}
@@ -1552,10 +1874,10 @@ const handleRecordSales = async (e: React.FormEvent) => {
                 await loadFuelStockCard();
                 await loadPumps();
               }}
-              disabled={loading}
+              disabled={isLoading()}
               className="gap-2"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isLoading() ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
             
@@ -1565,6 +1887,15 @@ const handleRecordSales = async (e: React.FormEvent) => {
                 Sync Now
               </Button>
             )}
+
+            <Button
+              variant="outline"
+              onClick={() => setShowSettingsDialog(true)}
+              className="gap-2"
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </Button>
           </div>
         </div>
 
@@ -1577,15 +1908,15 @@ const handleRecordSales = async (e: React.FormEvent) => {
                 variant="outline" 
                 size="sm" 
                 onClick={() => loadPumpPrices(true)}
-                disabled={pricesLoading}
+                disabled={loadingStates.prices}
                 className="gap-2"
               >
-                <RefreshCw className={`w-3 h-3 ${pricesLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3 h-3 ${loadingStates.prices ? 'animate-spin' : ''}`} />
                 Refresh Prices
               </Button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
-              {pricesLoading ? (
+              {loadingStates.prices ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <Skeleton className="h-4 w-20" />
@@ -1620,7 +1951,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
         </div>
 
         {/* Stats Cards */}
-        {loading ? (
+        {loadingStates.dailyReport ? (
           <StatsSkeleton />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -1715,7 +2046,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
 
           <TabsContent value="operations" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Sales Management - UPDATED with correct pump data */}
+              {/* Sales Management */}
               <Card className="p-6 bg-white rounded-2xl shadow-sm border-0">
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between">
@@ -1759,7 +2090,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
                                     <option value="">Select a pump</option>
                                     {pumps.map((pump) => (
                                       <option key={pump.id} value={pump.id}>
-                                        {/* UPDATED: Using correct column names from your table */}
                                         {pump.name} (No: {pump.number}) - {pump.fuel_type} (Current: {pump.current_meter_reading || 0}L)
                                       </option>
                                     ))}
@@ -1809,7 +2139,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
                                         product_type: selectedProduct?.name || 'Petrol',
                                         unit_price: price.toString()
                                       });
-                                      // Recalculate amount when product changes
                                       if (salesForm.opening_meter && salesForm.closing_meter) {
                                         calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, e.target.value);
                                       }
@@ -1836,7 +2165,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
                                       value={salesForm.opening_meter}
                                       onChange={(e) => {
                                         setSalesForm({ ...salesForm, opening_meter: e.target.value });
-                                        // Recalculate amount when opening meter changes
                                         if (e.target.value && salesForm.closing_meter && salesForm.product_id) {
                                           calculateSalesAmount(e.target.value, salesForm.closing_meter, salesForm.product_id);
                                         }
@@ -1855,7 +2183,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
                                       value={salesForm.closing_meter}
                                       onChange={(e) => {
                                         setSalesForm({ ...salesForm, closing_meter: e.target.value });
-                                        // Recalculate amount when closing meter changes
                                         if (salesForm.opening_meter && e.target.value && salesForm.product_id) {
                                           calculateSalesAmount(salesForm.opening_meter, e.target.value, salesForm.product_id);
                                         }
@@ -1928,7 +2255,6 @@ const handleRecordSales = async (e: React.FormEvent) => {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {/* Display current pumps status */}
                     <div className="mb-4 p-3 bg-gray-50 rounded-lg">
                       <p className="text-sm text-gray-600">
                         Active Pumps: {pumps.length}
@@ -2076,61 +2402,86 @@ const handleRecordSales = async (e: React.FormEvent) => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-3">
-                    {expenses.slice(0, 5).map((expense) => (
-                      <div key={expense.id} className="p-4 bg-gray-50 rounded-xl">
-                        <div className="flex items-center justify-between mb-2">
-                          <div>
-                            <p className="text-black font-medium capitalize">{expense.category}</p>
-                            <p className="text-sm text-gray-600">{expense.description}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-lg font-semibold text-black">₵{expense.amount}</p>
-                            <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(expense.status)}`}>
-                              {expense.status}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-gray-500">
-                          <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
-                          <div className="flex gap-2">
-                            {expense.status === 'pending' && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 px-2 text-green-600 border-green-200 hover:bg-green-50"
-                                  onClick={() => handleUpdateExpenseStatus(expense.id, 'approved')}
-                                >
-                                  <CheckCircle className="w-3 h-3 mr-1" />
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 px-2 text-red-600 border-red-200 hover:bg-red-50"
-                                  onClick={() => handleUpdateExpenseStatus(expense.id, 'rejected')}
-                                >
-                                  <XCircle className="w-3 h-3 mr-1" />
-                                  Reject
-                                </Button>
-                              </>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 px-2 text-red-600 border-red-200 hover:bg-red-50"
-                              onClick={() => handleDeleteExpense(expense.id)}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        </div>
+                  <div className="space-y-4">
+                    {/* Search and Filter */}
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <Input
+                          placeholder="Search expenses..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="bg-white"
+                        />
                       </div>
-                    ))}
-                    {expenses.length === 0 && (
-                      <p className="text-center text-gray-500 py-8">No expenses recorded</p>
-                    )}
+                      <select
+                        className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value)}
+                      >
+                        <option value="all">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                      </select>
+                    </div>
+
+                    {/* Expenses List */}
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                      {filteredExpenses.slice(0, 10).map((expense) => (
+                        <div key={expense.id} className="p-4 bg-gray-50 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <div>
+                              <p className="text-black font-medium capitalize">{expense.category}</p>
+                              <p className="text-sm text-gray-600">{expense.description}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-lg font-semibold text-black">₵{expense.amount}</p>
+                              <StatusBadge status={expense.status} />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between text-xs text-gray-500">
+                            <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
+                            <div className="flex gap-2">
+                              {expense.status === 'pending' && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-6 px-2 text-green-600 border-green-200 hover:bg-green-50"
+                                    onClick={() => handleUpdateExpenseStatus(expense.id, 'approved')}
+                                  >
+                                    <CheckCircle className="w-3 h-3 mr-1" />
+                                    Approve
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-6 px-2 text-red-600 border-red-200 hover:bg-red-50"
+                                    onClick={() => handleUpdateExpenseStatus(expense.id, 'rejected')}
+                                  >
+                                    <XCircle className="w-3 h-3 mr-1" />
+                                    Reject
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 px-2 text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => handleDeleteExpense(expense.id)}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {filteredExpenses.length === 0 && (
+                        <p className="text-center text-gray-500 py-8">
+                          {expenses.length === 0 ? 'No expenses recorded' : 'No expenses match your search'}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -2421,12 +2772,12 @@ const handleRecordSales = async (e: React.FormEvent) => {
                                 />
                               </div>
                               <div>
-                                <Label className="text-gray-700">Deliveries (L)</Label>
+                                <Label className="text-gray-700">Received (L)</Label>
                                 <Input
                                   type="number"
                                   step="0.01"
-                                  value={inventoryForm.deliveries}
-                                  onChange={(e) => setInventoryForm({ ...inventoryForm, deliveries: e.target.value })}
+                                  value={inventoryForm.received}
+                                  onChange={(e) => setInventoryForm({ ...inventoryForm, received: e.target.value })}
                                   placeholder="0.00"
                                   className="bg-white text-gray-900"
                                 />
@@ -2492,6 +2843,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
                 stationId={user?.station_id || ''} 
                 banks={banks}
                 onBankAdded={loadBanks}
+                showAddBank={true}
               />
             </Suspense>
           </TabsContent>
@@ -2554,7 +2906,7 @@ const handleRecordSales = async (e: React.FormEvent) => {
                           </div>
                           <div className="text-right">
                             <p className="text-sm text-gray-600">Opening: {item.opening_stock}L</p>
-                            <p className="text-sm text-gray-600">Deliveries: {item.deliveries}L</p>
+                            <p className="text-sm text-gray-600">Received: {item.received}L</p>
                             <p className="text-lg font-semibold text-black">Closing: {item.closing_stock}L</p>
                           </div>
                         </div>
@@ -2572,7 +2924,10 @@ const handleRecordSales = async (e: React.FormEvent) => {
           {/* Equipment Tab */}
           <TabsContent value="equipment">
             <Suspense fallback={<ContentSkeleton />}>
-              <LazyPumpCalibration stationId={user?.station_id || ''} />
+              <LazyPumpCalibration 
+                stationId={user?.station_id || ''} 
+                pumps={pumps}
+              />
             </Suspense>
           </TabsContent>
 
@@ -2584,21 +2939,36 @@ const handleRecordSales = async (e: React.FormEvent) => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  <Button className="w-full" variant="outline">
+                  <Button 
+                    className="w-full" 
+                    variant="outline"
+                    onClick={handleExportSales}
+                    disabled={!dailyReport?.sales.length}
+                  >
                     <Download className="w-4 h-4 mr-2" />
-                    Download Daily Report
+                    Download Sales Report ({dailyReport?.sales.length || 0})
+                  </Button>
+                  <Button 
+                    className="w-full" 
+                    variant="outline"
+                    onClick={handleExportExpenses}
+                    disabled={!expenses.length}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download Expense Report ({expenses.length})
+                  </Button>
+                  <Button 
+                    className="w-full" 
+                    variant="outline"
+                    onClick={handleExportInventory}
+                    disabled={!inventoryHistory.length}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download Inventory Report ({inventoryHistory.length})
                   </Button>
                   <Button className="w-full" variant="outline">
                     <Download className="w-4 h-4 mr-2" />
-                    Download Sales Report
-                  </Button>
-                  <Button className="w-full" variant="outline">
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Expense Report
-                  </Button>
-                  <Button className="w-full" variant="outline">
-                    <Download className="w-4 h-4 mr-2" />
-                    Download Inventory Report
+                    Download Daily Summary Report
                   </Button>
                 </div>
               </CardContent>
@@ -2654,6 +3024,85 @@ const handleRecordSales = async (e: React.FormEvent) => {
                   {submitting ? 'Adding...' : 'Add Bank'}
                 </Button>
               </form>
+            </ScrollableDialogContent>
+          </DialogContent>
+        </Dialog>
+
+        {/* Settings Dialog */}
+        <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
+          <DialogContent className="max-w-md bg-white">
+            <DialogHeader>
+              <DialogTitle className="text-gray-900">Dashboard Settings</DialogTitle>
+              <DialogDescription>Configure your dashboard preferences</DialogDescription>
+            </DialogHeader>
+            <ScrollableDialogContent>
+              <FormSection title="Auto Refresh">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="text-gray-700">Enable Auto Refresh</span>
+                  <input
+                    type="checkbox"
+                    checked={dashboardConfig.autoRefresh}
+                    onChange={(e) => setDashboardConfig(prev => ({ ...prev, autoRefresh: e.target.checked }))}
+                    className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </div>
+                {dashboardConfig.autoRefresh && (
+                  <div>
+                    <Label className="text-gray-700">Refresh Interval (seconds)</Label>
+                    <Input
+                      type="number"
+                      value={dashboardConfig.refreshInterval / 1000}
+                      onChange={(e) => setDashboardConfig(prev => ({ 
+                        ...prev, 
+                        refreshInterval: parseInt(e.target.value) * 1000 
+                      }))}
+                      min="10"
+                      max="300"
+                      className="bg-white text-gray-900"
+                    />
+                  </div>
+                )}
+              </FormSection>
+
+              <FormSection title="Notifications">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="text-gray-700">Show Notifications</span>
+                  <input
+                    type="checkbox"
+                    checked={dashboardConfig.showNotifications}
+                    onChange={(e) => setDashboardConfig(prev => ({ ...prev, showNotifications: e.target.checked }))}
+                    className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </div>
+              </FormSection>
+
+              <FormSection title="Default View">
+                <div>
+                  <Label className="text-gray-700">Default Tab</Label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
+                    value={dashboardConfig.defaultView}
+                    onChange={(e) => setDashboardConfig(prev => ({ ...prev, defaultView: e.target.value }))}
+                  >
+                    <option value="operations">Operations</option>
+                    <option value="financial">Financial</option>
+                    <option value="inventory">Inventory</option>
+                    <option value="equipment">Equipment</option>
+                    <option value="reports">Reports</option>
+                  </select>
+                </div>
+              </FormSection>
+
+              <Button 
+                onClick={() => {
+                  setShowSettingsDialog(false);
+                  toast.success('Settings saved successfully');
+                }}
+                className="w-full" 
+                style={{ backgroundColor: '#0B2265' }}
+              >
+                Save Settings
+              </Button>
             </ScrollableDialogContent>
           </DialogContent>
         </Dialog>

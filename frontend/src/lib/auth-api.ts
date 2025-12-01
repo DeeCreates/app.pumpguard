@@ -15,6 +15,7 @@ export type SignUpData = {
 export type SignInData = {
   email: string;
   password: string;
+  rememberMe?: boolean;
 };
 
 export type AuthResponse = {
@@ -33,6 +34,12 @@ export type AppealData = {
   contact_email?: string;
 };
 
+export type PasswordResetData = {
+  token: string;
+  newPassword: string;
+  confirmPassword?: string;
+};
+
 class AuthAPI {
   // Define role hierarchy and permissions
   private readonly roleHierarchy = {
@@ -47,6 +54,100 @@ class AuthAPI {
 
   // All valid roles in the system
   private readonly allRoles = ['admin', 'npa', 'omc', 'dealer', 'station_manager', 'attendant', 'supervisor'];
+
+  // Admin email patterns that cannot reset password via public form
+  private readonly adminEmailPatterns = [
+    /^admin@/i,
+    /@pumpguard\.com$/i,
+    /administrator@/i,
+    /superadmin@/i,
+    /root@/i,
+    /sysadmin@/i
+  ];
+
+  // Common passwords to reject
+  private readonly commonPasswords = [
+    'password', '123456', '12345678', '123456789', 'password123',
+    'admin', 'admin123', 'qwerty', 'letmein', 'welcome',
+    'monkey', 'dragon', 'baseball', 'football', 'jesus',
+    'master', 'hello', 'freedom', 'whatever', 'qazwsx',
+    'trustno1', 'dragon', 'sunshine', 'iloveyou', 'starwars'
+  ];
+
+  /**
+   * Check if email belongs to admin account
+   */
+  private isAdminEmail(email: string): boolean {
+    return this.adminEmailPatterns.some(pattern => pattern.test(email));
+  }
+
+  /**
+   * Validate password strength
+   */
+  private validatePasswordStrength(password: string): { valid: boolean; error?: string } {
+    if (password.length < 8) {
+      return { valid: false, error: 'Password must be at least 8 characters long' };
+    }
+
+    if (!/[A-Z]/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one uppercase letter' };
+    }
+
+    if (!/[a-z]/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one lowercase letter' };
+    }
+
+    if (!/[0-9]/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one number' };
+    }
+
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+      return { valid: false, error: 'Password must contain at least one special character' };
+    }
+
+    // Check against common passwords
+    if (this.commonPasswords.includes(password.toLowerCase())) {
+      return { valid: false, error: 'Password is too common. Please choose a stronger password.' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Rate limiting helper
+   */
+  private async checkRateLimit(key: string, maxAttempts: number = 5, windowMinutes: number = 15): Promise<boolean> {
+    const now = Date.now();
+    const storageKey = `rate_limit_${key}`;
+    const attempts = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    
+    // Remove attempts older than window
+    const recentAttempts = attempts.filter((timestamp: number) => 
+      now - timestamp < windowMinutes * 60 * 1000
+    );
+    
+    if (recentAttempts.length >= maxAttempts) {
+      return false;
+    }
+    
+    recentAttempts.push(now);
+    localStorage.setItem(storageKey, JSON.stringify(recentAttempts));
+    return true;
+  }
+
+  /**
+   * Clear rate limit for a key
+   */
+  private clearRateLimit(key: string): void {
+    localStorage.removeItem(`rate_limit_${key}`);
+  }
+
+  /**
+   * Sanitize email
+   */
+  private sanitizeEmail(email: string): string {
+    return email.trim().toLowerCase();
+  }
 
   /**
    * Check if current user can create a user with the specified role
@@ -147,591 +248,964 @@ class AuthAPI {
     return { valid: true };
   }
 
-  // ===== VIOLATION MANAGEMENT METHODS =====
+  // ===== PASSWORD RESET FUNCTIONALITY =====
 
   /**
-   * Appeal a violation - requires proper permissions
+   * Request password reset (forgot password)
+   * IMPORTANT: Admin accounts cannot reset password via this public method
    */
-  async appealViolation(appealData: AppealData): Promise<AuthResponse> {
+  async forgotPassword(email: string, resetUrl?: string): Promise<AuthResponse> {
     try {
-      const currentUser = await this.getCurrentUser();
+      const sanitizedEmail = this.sanitizeEmail(email);
       
-      if (!currentUser.data?.user) {
+      // Rate limiting check
+      const canProceed = await this.checkRateLimit(`forgot_password_${sanitizedEmail}`);
+      if (!canProceed) {
         return {
           success: false,
-          error: 'User not authenticated'
+          error: 'Too many password reset attempts. Please try again in 15 minutes.'
         };
       }
 
-      // Check if user can appeal this violation
-      const canAppeal = await this.canAppealViolation(appealData.violation_id, currentUser.data.user.id);
-      if (!canAppeal.success) {
-        return canAppeal;
-      }
+      // Check if it's an admin account
+      if (this.isAdminEmail(sanitizedEmail)) {
+        // Log security event but don't reveal it's an admin account
+        await this.logSecurityEvent({
+          type: 'ADMIN_PASSWORD_RESET_ATTEMPT',
+          email: sanitizedEmail,
+          action: 'BLOCKED',
+          userAgent: navigator.userAgent,
+          timestamp: new Date().toISOString()
+        });
 
-      // Update violation status to appealed
-      const { data, error } = await supabase
-        .from('compliance_violations')
-        .update({
-          status: 'appealed',
-          appeal_reason: appealData.appeal_reason,
-          appeal_submitted_at: new Date().toISOString(),
-          appeal_submitted_by: currentUser.data.user.id,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', appealData.violation_id)
-        .select(`
-          *,
-          stations (name, omcs(name)),
-          products (name)
-        `)
-        .single();
-
-      if (error) {
-        console.error('Violation appeal error:', error);
-        return {
-          success: false,
-          error: error.message || 'Failed to submit appeal'
-        };
-      }
-
-      // Log appeal activity
-      await this.logViolationActivity(
-        appealData.violation_id,
-        'appeal_submitted',
-        `Appeal submitted: ${appealData.appeal_reason}`,
-        currentUser.data.user.id
-      );
-
-      console.log('Violation appealed successfully:', appealData.violation_id);
-      return {
-        success: true,
-        message: 'Appeal submitted successfully!',
-        data
-      };
-
-    } catch (error: any) {
-      console.error('Violation appeal error:', error);
-      return {
-        success: false,
-        error: 'Failed to submit appeal: ' + error.message
-      };
-    }
-  }
-
-  /**
-   * Resolve a violation - admin/npa only
-   */
-  async resolveViolation(violationId: string, resolutionData: {
-    resolution: string;
-    final_fine_amount?: number;
-    notes?: string;
-  }): Promise<AuthResponse> {
-    try {
-      const currentUser = await this.getCurrentUser();
-      
-      if (!currentUser.data?.user) {
-        return {
-          success: false,
-          error: 'User not authenticated'
-        };
-      }
-
-      // Check if user can resolve violations
-      const canResolve = await this.canManageViolations(currentUser.data.user.id);
-      if (!canResolve.success) {
-        return {
-          success: false,
-          error: 'You do not have permission to resolve violations'
-        };
-      }
-
-      const updateData: any = {
-        status: 'resolved',
-        resolved_by: currentUser.data.user.id,
-        resolved_at: new Date().toISOString(),
-        resolution_notes: resolutionData.notes,
-        updated_at: new Date().toISOString()
-      };
-
-      if (resolutionData.final_fine_amount !== undefined) {
-        updateData.fine_amount = resolutionData.final_fine_amount;
-      }
-
-      const { data, error } = await supabase
-        .from('compliance_violations')
-        .update(updateData)
-        .eq('id', violationId)
-        .select(`
-          *,
-          stations (name, omcs(name)),
-          products (name)
-        `)
-        .single();
-
-      if (error) {
-        console.error('Violation resolution error:', error);
-        return {
-          success: false,
-          error: error.message || 'Failed to resolve violation'
-        };
-      }
-
-      // Log resolution activity
-      await this.logViolationActivity(
-        violationId,
-        'violation_resolved',
-        `Violation resolved: ${resolutionData.resolution}`,
-        currentUser.data.user.id
-      );
-
-      console.log('Violation resolved successfully:', violationId);
-      return {
-        success: true,
-        message: 'Violation resolved successfully!',
-        data
-      };
-
-    } catch (error: any) {
-      console.error('Violation resolution error:', error);
-      return {
-        success: false,
-        error: 'Failed to resolve violation: ' + error.message
-      };
-    }
-  }
-
-  /**
-   * Escalate violation severity
-   */
-  async escalateViolation(violationId: string, newSeverity: 'medium' | 'high' | 'critical', reason: string): Promise<AuthResponse> {
-    try {
-      const currentUser = await this.getCurrentUser();
-      
-      if (!currentUser.data?.user) {
-        return {
-          success: false,
-          error: 'User not authenticated'
-        };
-      }
-
-      // Check if user can escalate violations
-      const canEscalate = await this.canManageViolations(currentUser.data.user.id);
-      if (!canEscalate.success) {
-        return {
-          success: false,
-          error: 'You do not have permission to escalate violations'
-        };
-      }
-
-      const { data, error } = await supabase
-        .from('compliance_violations')
-        .update({
-          severity: newSeverity,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', violationId)
-        .select(`
-          *,
-          stations (name, omcs(name)),
-          products (name)
-        `)
-        .single();
-
-      if (error) {
-        console.error('Violation escalation error:', error);
-        return {
-          success: false,
-          error: error.message || 'Failed to escalate violation'
-        };
-      }
-
-      // Log escalation activity
-      await this.logViolationActivity(
-        violationId,
-        'severity_escalated',
-        `Severity escalated to ${newSeverity}: ${reason}`,
-        currentUser.data.user.id
-      );
-
-      console.log('Violation escalated successfully:', violationId);
-      return {
-        success: true,
-        message: `Violation escalated to ${newSeverity} severity!`,
-        data
-      };
-
-    } catch (error: any) {
-      console.error('Violation escalation error:', error);
-      return {
-        success: false,
-        error: 'Failed to escalate violation: ' + error.message
-      };
-    }
-  }
-
-  /**
-   * Check if user can appeal a specific violation
-   */
-  async canAppealViolation(violationId: string, userId: string): Promise<AuthResponse> {
-    try {
-      // Get violation details
-      const { data: violation, error } = await supabase
-        .from('compliance_violations')
-        .select('station_id, stations(omc_id), status')
-        .eq('id', violationId)
-        .single();
-
-      if (error || !violation) {
-        return {
-          success: false,
-          error: 'Violation not found'
-        };
-      }
-
-      // Check if violation is already resolved
-      if (violation.status === 'resolved') {
-        return {
-          success: false,
-          error: 'Cannot appeal a resolved violation'
-        };
-      }
-
-      // Check if violation is already appealed
-      if (violation.status === 'appealed') {
-        return {
-          success: false,
-          error: 'Violation is already under appeal'
-        };
-      }
-
-      // Get user profile to check permissions
-      const { data: userProfile } = await supabase
-        .from('profiles')
-        .select('role, omc_id, station_id, dealer_id')
-        .eq('id', userId)
-        .single();
-
-      if (!userProfile) {
-        return {
-          success: false,
-          error: 'User profile not found'
-        };
-      }
-
-      // Check permissions based on role
-      const userRole = userProfile.role;
-      const stationOmcId = violation.stations?.omc_id;
-
-      switch (userRole) {
-        case 'admin':
-        case 'npa':
-        case 'supervisor':
-          return { success: true, message: 'User can appeal any violation' };
-        
-        case 'omc':
-          if (userProfile.omc_id === stationOmcId) {
-            return { success: true, message: 'OMC user can appeal violations for their OMC' };
-          }
-          break;
-        
-        case 'dealer':
-          // Dealers can appeal violations for stations under their dealer
-          const { data: dealerStations } = await supabase
-            .from('stations')
-            .select('id')
-            .eq('dealer_id', userProfile.dealer_id);
-          
-          if (dealerStations?.some(station => station.id === violation.station_id)) {
-            return { success: true, message: 'Dealer can appeal violations for their stations' };
-          }
-          break;
-        
-        case 'station_manager':
-          if (userProfile.station_id === violation.station_id) {
-            return { success: true, message: 'Station manager can appeal violations for their station' };
-          }
-          break;
-      }
-
-      return {
-        success: false,
-        error: 'You do not have permission to appeal this violation'
-      };
-
-    } catch (error: any) {
-      console.error('Error checking appeal permissions:', error);
-      return {
-        success: false,
-        error: 'Failed to check appeal permissions: ' + error.message
-      };
-    }
-  }
-
-  /**
-   * Check if user can manage violations
-   */
-  async canManageViolations(userId: string): Promise<AuthResponse> {
-    try {
-      const { data: userProfile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-
-      if (!userProfile) {
-        return {
-          success: false,
-          error: 'User profile not found'
-        };
-      }
-
-      const allowedRoles = ['admin', 'npa', 'supervisor'];
-      
-      if (allowedRoles.includes(userProfile.role)) {
+        // Return generic success message (security through obscurity)
         return {
           success: true,
-          message: 'User can manage violations'
+          message: 'If an account exists with this email, you will receive reset instructions shortly.'
         };
       }
 
+      // Normal user - check if email exists in our system
+      const { data: existingUser, error: userError } = await supabase
+        .from('profiles')
+        .select('id, email, role')
+        .eq('email', sanitizedEmail)
+        .single();
+
+      if (userError || !existingUser) {
+        // Still return success to prevent email enumeration attacks
+        return {
+          success: true,
+          message: 'If an account exists with this email, you will receive reset instructions shortly.'
+        };
+      }
+
+      // Generate secure reset token using Supabase's built-in reset
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        sanitizedEmail,
+        {
+          redirectTo: resetUrl || `${window.location.origin}/auth/reset-password`,
+        }
+      );
+
+      if (resetError) {
+        console.error('Password reset request error:', resetError);
+        return {
+          success: false,
+          error: 'Failed to send reset instructions. Please try again later.'
+        };
+      }
+
+      // Log successful request
+      await this.logSecurityEvent({
+        type: 'PASSWORD_RESET_REQUESTED',
+        email: sanitizedEmail,
+        action: 'REQUESTED',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+
       return {
-        success: false,
-        error: 'User does not have permission to manage violations'
+        success: true,
+        message: 'Password reset instructions have been sent to your email.'
       };
 
     } catch (error: any) {
-      console.error('Error checking violation management permissions:', error);
+      console.error('Forgot password error:', error);
       return {
         success: false,
-        error: 'Failed to check permissions: ' + error.message
+        error: 'An unexpected error occurred. Please try again.'
       };
     }
   }
 
   /**
-   * Get violations specific to user's scope
+   * Reset password with token
    */
-  async getUserViolations(filters: any = {}): Promise<AuthResponse> {
+  async resetPassword(resetData: PasswordResetData): Promise<AuthResponse> {
     try {
-      const currentUser = await this.getCurrentUser();
+      const { token, newPassword, confirmPassword } = resetData;
+
+      // Validate token exists
+      if (!token) {
+        return {
+          success: false,
+          error: 'Invalid or expired reset token.'
+        };
+      }
+
+      // Check if passwords match
+      if (confirmPassword && newPassword !== confirmPassword) {
+        return {
+          success: false,
+          error: 'Passwords do not match.'
+        };
+      }
+
+      // Validate password strength
+      const passwordValidation = this.validatePasswordStrength(newPassword);
+      if (!passwordValidation.valid) {
+        return {
+          success: false,
+          error: passwordValidation.error
+        };
+      }
+
+      // First, get the user from the token
+      const { data: { user }, error: tokenError } = await supabase.auth.verifyOtp({
+        token_hash: token,
+        type: 'recovery'
+      });
+
+      if (tokenError || !user) {
+        return {
+          success: false,
+          error: 'Invalid or expired reset token. Please request a new password reset.'
+        };
+      }
+
+      // Check if this is an admin account
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, email')
+        .eq('id', user.id)
+        .single();
+
+      if (profile && this.isAdminEmail(profile.email)) {
+        // Admin password reset must be done through admin panel
+        return {
+          success: false,
+          error: 'Admin password cannot be reset through this form. Please contact system administrator.'
+        };
+      }
+
+      // Update password using Supabase's updateUser method
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (updateError) {
+        console.error('Password update error:', updateError);
+        return {
+          success: false,
+          error: 'Failed to update password. Please try again.'
+        };
+      }
+
+      // Clear rate limit for this email
+      this.clearRateLimit(`forgot_password_${this.sanitizeEmail(user.email || '')}`);
+
+      // Log password reset
+      await this.logSecurityEvent({
+        type: 'PASSWORD_RESET_COMPLETED',
+        email: user.email,
+        userId: user.id,
+        action: 'COMPLETED',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+
+      // Update password reset time in profile
+      await supabase
+        .from('profiles')
+        .update({ 
+          password_changed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+
+      return {
+        success: true,
+        message: 'Password has been reset successfully! You can now log in with your new password.',
+        data: { email: user.email }
+      };
+
+    } catch (error: any) {
+      console.error('Reset password error:', error);
+      return {
+        success: false,
+        error: 'An unexpected error occurred. Please try again.'
+      };
+    }
+  }
+
+  /**
+   * Change password for logged-in user
+   */
+  async changePassword(currentPassword: string, newPassword: string): Promise<AuthResponse> {
+    try {
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
       
-      if (!currentUser.data?.user) {
+      if (!user) {
         return {
           success: false,
           error: 'User not authenticated'
         };
       }
 
-      const userProfile = currentUser.data.profile;
-      if (!userProfile) {
+      // Re-authenticate with current password
+      const { error: reauthError } = await supabase.auth.signInWithPassword({
+        email: user.email!,
+        password: currentPassword
+      });
+
+      if (reauthError) {
         return {
           success: false,
-          error: 'User profile not found'
+          error: 'Current password is incorrect'
         };
       }
 
-      let query = supabase
-        .from('compliance_violations')
-        .select(`
-          *,
-          stations (name, omcs(name)),
-          products (name, unit),
-          profiles (full_name)
-        `)
-        .order('created_at', { ascending: false });
-
-      // Apply role-based filtering
-      switch (userProfile.role) {
-        case 'omc':
-          if (userProfile.omc_id) {
-            // Get all stations for this OMC
-            const { data: omcStations } = await supabase
-              .from('stations')
-              .select('id')
-              .eq('omc_id', userProfile.omc_id);
-            
-            if (omcStations && omcStations.length > 0) {
-              query = query.in('station_id', omcStations.map(s => s.id));
-            }
-          }
-          break;
-        
-        case 'dealer':
-          if (userProfile.dealer_id) {
-            // Get all stations for this dealer
-            const { data: dealerStations } = await supabase
-              .from('stations')
-              .select('id')
-              .eq('dealer_id', userProfile.dealer_id);
-            
-            if (dealerStations && dealerStations.length > 0) {
-              query = query.in('station_id', dealerStations.map(s => s.id));
-            }
-          }
-          break;
-        
-        case 'station_manager':
-        case 'attendant':
-          if (userProfile.station_id) {
-            query = query.eq('station_id', userProfile.station_id);
-          }
-          break;
-        
-        // admin, npa, supervisor can see all violations
+      // Validate new password strength
+      const passwordValidation = this.validatePasswordStrength(newPassword);
+      if (!passwordValidation.valid) {
+        return {
+          success: false,
+          error: passwordValidation.error
+        };
       }
 
-      // Apply additional filters
-      if (filters.status) {
-        query = query.eq('status', filters.status);
-      }
-      if (filters.severity) {
-        query = query.eq('severity', filters.severity);
-      }
-      if (filters.start_date) {
-        query = query.gte('violation_date', filters.start_date);
-      }
-      if (filters.end_date) {
-        query = query.lte('violation_date', filters.end_date);
+      // Update password
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (updateError) {
+        console.error('Change password error:', updateError);
+        return {
+          success: false,
+          error: 'Failed to change password. Please try again.'
+        };
       }
 
-      const { data, error } = await query;
+      // Log password change
+      await this.logSecurityEvent({
+        type: 'PASSWORD_CHANGED',
+        email: user.email,
+        userId: user.id,
+        action: 'CHANGED',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+
+      // Update password change time in profile
+      await supabase
+        .from('profiles')
+        .update({ 
+          password_changed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+
+      return {
+        success: true,
+        message: 'Password changed successfully!'
+      };
+
+    } catch (error: any) {
+      console.error('Change password error:', error);
+      return {
+        success: false,
+        error: 'An unexpected error occurred. Please try again.'
+      };
+    }
+  }
+
+  /**
+   * Admin-only: Force reset user password
+   */
+  async adminResetPassword(userId: string, adminUserId: string): Promise<AuthResponse> {
+    try {
+      // Get admin profile to verify permissions
+      const { data: adminProfile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', adminUserId)
+        .single();
+
+      if (!adminProfile || !['admin', 'supervisor'].includes(adminProfile.role)) {
+        return {
+          success: false,
+          error: 'You do not have permission to reset user passwords.'
+        };
+      }
+
+      // Get user to reset
+      const { data: userToReset } = await supabase.auth.admin.getUserById(userId);
+      
+      if (!userToReset || !userToReset.user) {
+        return {
+          success: false,
+          error: 'User not found'
+        };
+      }
+
+      // Generate temporary password
+      const tempPassword = this.generateTemporaryPassword();
+      
+      // Update user password (admin API)
+      const { data: updatedUser, error: updateError } = await supabase.auth.admin.updateUserById(
+        userId,
+        { password: tempPassword }
+      );
+
+      if (updateError) {
+        console.error('Admin password reset error:', updateError);
+        return {
+          success: false,
+          error: 'Failed to reset password. Please try again.'
+        };
+      }
+
+      // Log admin action
+      await this.logSecurityEvent({
+        type: 'ADMIN_PASSWORD_RESET',
+        adminId: adminUserId,
+        targetUserId: userId,
+        targetEmail: userToReset.user.email,
+        action: 'RESET',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+
+      // Update profile
+      await supabase
+        .from('profiles')
+        .update({ 
+          password_changed_at: null, // Force password change on next login
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId);
+
+      return {
+        success: true,
+        message: 'Password has been reset successfully.',
+        data: {
+          email: userToReset.user.email,
+          temporaryPassword: tempPassword,
+          note: 'User must change password on next login'
+        }
+      };
+
+    } catch (error: any) {
+      console.error('Admin password reset error:', error);
+      return {
+        success: false,
+        error: 'An unexpected error occurred. Please try again.'
+      };
+    }
+  }
+
+  /**
+   * Generate temporary password
+   */
+  private generateTemporaryPassword(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
+    let password = '';
+    
+    // Ensure at least one of each required character type
+    password += chars.charAt(Math.floor(Math.random() * 26)); // Uppercase
+    password += chars.charAt(26 + Math.floor(Math.random() * 26)); // Lowercase
+    password += chars.charAt(52 + Math.floor(Math.random() * 10)); // Number
+    password += chars.charAt(62 + Math.floor(Math.random() * 10)); // Special
+    
+    // Fill remaining characters
+    for (let i = 4; i < 12; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    
+    // Shuffle the password
+    return password.split('').sort(() => 0.5 - Math.random()).join('');
+  }
+
+  /**
+   * Log security events
+   */
+  private async logSecurityEvent(eventData: {
+    type: string;
+    email?: string;
+    userId?: string;
+    adminId?: string;
+    targetUserId?: string;
+    targetEmail?: string;
+    action: string;
+    userAgent: string;
+    timestamp: string;
+    details?: any;
+  }): Promise<void> {
+    try {
+      await supabase
+        .from('security_events')
+        .insert({
+          type: eventData.type,
+          email: eventData.email,
+          user_id: eventData.userId,
+          admin_id: eventData.adminId,
+          target_user_id: eventData.targetUserId,
+          target_email: eventData.targetEmail,
+          action: eventData.action,
+          user_agent: eventData.userAgent,
+          ip_address: 'client_ip', // In production, get from request headers
+          details: eventData.details || {},
+          created_at: eventData.timestamp
+        });
+    } catch (error) {
+      console.error('Error logging security event:', error);
+      // Don't throw - logging should not break main functionality
+    }
+  }
+
+  // ===== ENHANCED SIGN IN WITH SECURITY MEASURES =====
+
+  async signIn({ email, password, rememberMe = false }: SignInData): Promise<AuthResponse> {
+    try {
+      if (!email || !password) {
+        return {
+          success: false,
+          error: 'Email and password are required'
+        };
+      }
+
+      const sanitizedEmail = this.sanitizeEmail(email);
+
+      // Rate limiting check
+      const canProceed = await this.checkRateLimit(`login_${sanitizedEmail}`);
+      if (!canProceed) {
+        return {
+          success: false,
+          error: 'Too many login attempts. Please try again in 15 minutes.'
+        };
+      }
+
+      // Check if account is locked
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_active, login_attempts, locked_until')
+        .eq('email', sanitizedEmail)
+        .single();
+
+      if (profile) {
+        if (!profile.is_active) {
+          return {
+            success: false,
+            error: 'Account is deactivated. Please contact administrator.'
+          };
+        }
+
+        if (profile.locked_until && new Date(profile.locked_until) > new Date()) {
+          return {
+            success: false,
+            error: 'Account is temporarily locked. Please try again later.'
+          };
+        }
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: sanitizedEmail,
+        password,
+      });
 
       if (error) {
+        // Increment failed login attempts
+        if (profile) {
+          const newAttempts = (profile.login_attempts || 0) + 1;
+          const updateData: any = {
+            login_attempts: newAttempts,
+            updated_at: new Date().toISOString()
+          };
+
+          // Lock account after 5 failed attempts
+          if (newAttempts >= 5) {
+            const lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+            updateData.locked_until = lockUntil.toISOString();
+            updateData.login_attempts = 0; // Reset after lock
+          }
+
+          await supabase
+            .from('profiles')
+            .update(updateData)
+            .eq('email', sanitizedEmail);
+        }
+
+        // Log failed attempt
+        await this.logSecurityEvent({
+          type: 'LOGIN_FAILED',
+          email: sanitizedEmail,
+          action: 'FAILED',
+          userAgent: navigator.userAgent,
+          timestamp: new Date().toISOString(),
+          details: { error: error.message }
+        });
+
         return {
           success: false,
-          error: error.message
+          error: this.getErrorMessage(error)
         };
+      }
+
+      // Reset login attempts on successful login
+      if (profile) {
+        await supabase
+          .from('profiles')
+          .update({ 
+            login_attempts: 0,
+            locked_until: null,
+            last_login_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('email', sanitizedEmail);
+      }
+
+      // Clear rate limit for successful login
+      this.clearRateLimit(`login_${sanitizedEmail}`);
+
+      // Log successful login
+      await this.logSecurityEvent({
+        type: 'LOGIN_SUCCESS',
+        email: sanitizedEmail,
+        userId: data.user.id,
+        action: 'SUCCESS',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString()
+      });
+
+      // Set session expiration based on rememberMe
+      if (rememberMe) {
+        // Extend session for 30 days
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+        });
+
+        if (sessionError) {
+          console.error('Error setting extended session:', sessionError);
+        }
       }
 
       return {
         success: true,
+        message: 'Signed in successfully!',
         data
       };
 
     } catch (error: any) {
+      console.error('Unexpected signin error:', error);
       return {
         success: false,
-        error: 'Failed to fetch user violations: ' + error.message
+        error: 'An unexpected error occurred. Please try again.'
       };
     }
   }
 
-  /**
-   * Submit appeal with additional evidence
-   */
-  async submitAppeal(violationId: string, appealData: {
-    reason: string;
-    evidence_urls: string[];
-    contact_info?: {
-      name: string;
-      phone: string;
-      email: string;
-    };
-  }): Promise<AuthResponse> {
+  // ===== ENHANCED SIGN UP WITH PASSWORD VALIDATION =====
+
+  async signUp({ email, password, fullName, phone, role, omc_id, station_id, dealer_id }: SignUpData): Promise<AuthResponse> {
     try {
-      const currentUser = await this.getCurrentUser();
-      
-      if (!currentUser.data?.user) {
+      // Validate input
+      if (!email || !password) {
         return {
           success: false,
-          error: 'User not authenticated'
+          error: 'Email and password are required'
         };
       }
 
-      // Verify user can appeal this violation
-      const canAppeal = await this.canAppealViolation(violationId, currentUser.data.user.id);
-      if (!canAppeal.success) {
-        return canAppeal;
+      // Validate password strength
+      const passwordValidation = this.validatePasswordStrength(password);
+      if (!passwordValidation.valid) {
+        return {
+          success: false,
+          error: passwordValidation.error
+        };
       }
 
-      const updateData: any = {
-        status: 'appealed',
-        appeal_reason: appealData.reason,
-        appeal_submitted_at: new Date().toISOString(),
-        appeal_submitted_by: currentUser.data.user.id,
+      if (password.length < 8) {
+        return {
+          success: false,
+          error: 'Password must be at least 8 characters long'
+        };
+      }
+
+      // Validate role
+      const targetRole = role || 'attendant';
+      
+      if (!this.allRoles.includes(targetRole)) {
+        return {
+          success: false,
+          error: `Invalid role '${targetRole}'. Available roles: ${this.allRoles.join(', ')}`
+        };
+      }
+
+      // Auto-clean parent references for station-level roles BEFORE validation
+      let cleanedOmcId = omc_id;
+      let cleanedDealerId = dealer_id;
+      let cleanedStationId = station_id;
+      
+      if (targetRole === 'station_manager' || targetRole === 'attendant') {
+        cleanedOmcId = null;
+        cleanedDealerId = null;
+        
+        if (!cleanedStationId) {
+          return {
+            success: false,
+            error: `${this.formatRoleDisplay(targetRole)} must be assigned to a station`
+          };
+        }
+      }
+
+      // Enhanced role assignment validation with CLEANED values
+      const assignmentValidation = this.validateRoleAssignment(
+        targetRole, 
+        cleanedOmcId, 
+        cleanedStationId, 
+        cleanedDealerId
+      );
+      
+      if (!assignmentValidation.valid) {
+        return {
+          success: false,
+          error: assignmentValidation.error
+        };
+      }
+
+      // Check if current user has permission to create this role
+      const creatorRole = await this.getCurrentUserRole();
+      
+      if (creatorRole && !(await this.canCreateRole(creatorRole, targetRole))) {
+        return {
+          success: false,
+          error: `You don't have permission to create users with role '${targetRole}'. Your role: ${creatorRole}`
+        };
+      }
+
+      // Create auth user
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: fullName,
+            phone: phone,
+            role: targetRole,
+            omc_id: cleanedOmcId,
+            station_id: cleanedStationId,
+            dealer_id: cleanedDealerId
+          },
+          emailRedirectTo: `${window.location.origin}/auth/confirm-email`
+        }
+      });
+
+      if (error) {
+        if (error.message.includes('already registered') || error.message.includes('already exists')) {
+          return await this.handleExistingUser(email, password, fullName, phone, targetRole, cleanedOmcId, cleanedStationId, cleanedDealerId);
+        }
+        
+        return {
+          success: false,
+          error: this.getErrorMessage(error)
+        };
+      }
+
+      if (!data.user) {
+        return {
+          success: false,
+          error: 'No user data returned from authentication'
+        };
+      }
+
+      // Build profile data according to role constraints
+      const profileData: any = {
+        id: data.user.id,
+        email: email,
+        role: targetRole,
+        full_name: fullName || email.split('@')[0],
+        phone: phone || null,
+        is_active: true,
+        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
 
-      // Store evidence URLs if provided
-      if (appealData.evidence_urls && appealData.evidence_urls.length > 0) {
-        updateData.appeal_evidence_urls = appealData.evidence_urls;
+      // Set IDs according to role constraints using CLEANED values
+      switch (targetRole) {
+        case 'admin':
+        case 'supervisor':
+          profileData.omc_id = null;
+          profileData.dealer_id = null;
+          profileData.station_id = null;
+          break;
+        case 'omc':
+          profileData.omc_id = cleanedOmcId;
+          profileData.dealer_id = null;
+          profileData.station_id = null;
+          break;
+        case 'dealer':
+          profileData.omc_id = null;
+          profileData.dealer_id = cleanedDealerId;
+          profileData.station_id = null;
+          break;
+        case 'station_manager':
+        case 'attendant':
+          profileData.omc_id = null;
+          profileData.dealer_id = null;
+          profileData.station_id = cleanedStationId;
+          break;
       }
 
-      // Store contact information if provided
-      if (appealData.contact_info) {
-        updateData.appeal_contact_person = appealData.contact_info.name;
-        updateData.appeal_contact_phone = appealData.contact_info.phone;
-        updateData.appeal_contact_email = appealData.contact_info.email;
-      }
-
-      const { data, error } = await supabase
-        .from('compliance_violations')
-        .update(updateData)
-        .eq('id', violationId)
-        .select(`
-          *,
-          stations (name, omcs(name)),
-          products (name)
-        `)
+      // Create profile
+      const { data: profileResult, error: profileError } = await supabase
+        .from('profiles')
+        .insert(profileData)
+        .select()
         .single();
 
-      if (error) {
-        console.error('Appeal submission error:', error);
+      if (profileError) {
+        if (profileError.message.includes('valid_role_assignment')) {
+          return {
+            success: false,
+            error: `Database constraint violation: ${this.formatRoleDisplay(targetRole)} role requires specific assignment rules. Please check that the user is properly assigned to the correct entity.`
+          };
+        }
+        
         return {
           success: false,
-          error: error.message || 'Failed to submit appeal'
+          error: `Failed to create user profile: ${profileError.message}`
         };
       }
 
-      // Log appeal activity
-      await this.logViolationActivity(
-        violationId,
-        'appeal_submitted',
-        `Appeal submitted with ${appealData.evidence_urls?.length || 0} evidence files`,
-        currentUser.data.user.id
-      );
+      // Log user creation
+      await this.logSecurityEvent({
+        type: 'USER_CREATED',
+        email: email,
+        userId: data.user.id,
+        action: 'CREATED',
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString(),
+        details: { role: targetRole }
+      });
 
-      console.log('Appeal submitted successfully:', violationId);
       return {
         success: true,
-        message: 'Appeal submitted successfully!',
-        data
+        message: `${this.formatRoleDisplay(targetRole)} account created successfully!`,
+        data: { user: data.user, profile: profileResult }
       };
 
     } catch (error: any) {
-      console.error('Appeal submission error:', error);
+      console.error('Unexpected signup error:', error);
       return {
         success: false,
-        error: 'Failed to submit appeal: ' + error.message
+        error: 'An unexpected error occurred. Please try again.'
+      };
+    }
+  }
+
+  // ===== SESSION MANAGEMENT =====
+
+  /**
+   * Get current session with enhanced security
+   */
+  async getCurrentSession() {
+    try {
+      const { data: sessionData, error } = await supabase.auth.getSession();
+      
+      if (error) {
+        throw error;
+      }
+      
+      if (sessionData.session?.user) {
+        // Verify session is still valid
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (!user) {
+          // Session expired, clear it
+          await supabase.auth.signOut();
+          return { data: null, error: null };
+        }
+      }
+      
+      return { data: sessionData.session, error: null };
+    } catch (error) {
+      return { data: null, error };
+    }
+  }
+
+  /**
+   * Refresh session token
+   */
+  async refreshSession(): Promise<boolean> {
+    try {
+      const { data, error } = await supabase.auth.refreshSession();
+      return !error;
+    } catch (error) {
+      console.error('Session refresh error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Sign out with security logging
+   */
+  async signOut(): Promise<AuthResponse> {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (user) {
+        // Log logout event
+        await this.logSecurityEvent({
+          type: 'LOGOUT',
+          email: user.email,
+          userId: user.id,
+          action: 'LOGOUT',
+          userAgent: navigator.userAgent,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        return {
+          success: false,
+          error: this.getErrorMessage(error)
+        };
+      }
+
+      return {
+        success: true,
+        message: 'Signed out successfully'
+      };
+
+    } catch (error) {
+      console.error('Unexpected signout error:', error);
+      return {
+        success: false,
+        error: 'Failed to sign out'
       };
     }
   }
 
   /**
-   * Log violation activity for audit trail
+   * Get current user with enhanced security
    */
-  private async logViolationActivity(
-    violationId: string,
-    action: string,
-    description: string,
-    userId: string
-  ): Promise<void> {
+  async getCurrentUser() {
     try {
-      await supabase
-        .from('violation_activities')
-        .insert({
-          violation_id: violationId,
-          action,
-          description,
-          performed_by: userId,
-          created_at: new Date().toISOString()
-        });
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) {
+        throw authError;
+      }
+      
+      if (authData.user) {
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select(`
+            *,
+            omcs (*),
+            stations (*),
+            dealers (*)
+          `)
+          .eq('id', authData.user.id)
+          .single();
+
+        if (profileError) {
+          return { 
+            data: {
+              user: authData.user,
+              profile: null
+            }, 
+            error: null 
+          };
+        }
+
+        // Check if password needs to be changed (admin reset)
+        const passwordChangeRequired = !profileData.password_changed_at;
+        
+        return { 
+          data: {
+            user: authData.user,
+            profile: {
+              ...profileData,
+              password_change_required: passwordChangeRequired
+            }
+          }, 
+          error: null 
+        };
+      }
+
+      return { data: null, error: null };
+      
     } catch (error) {
-      console.error('Error logging violation activity:', error);
+      console.error('Unexpected user fetch error:', error);
+      return { data: null, error };
     }
   }
 
+  // ===== HELPER METHODS =====
+
+  /**
+   * Translate Supabase errors to user-friendly messages
+   */
+  private getErrorMessage(error: any): string {
+    const errorMap: { [key: string]: string } = {
+      'invalid_credentials': 'Invalid email or password',
+      'email_not_confirmed': 'Please confirm your email address. Check your inbox or contact administrator.',
+      'user_already_exists': 'An account with this email already exists',
+      'weak_password': 'Password must be at least 6 characters long',
+      'invalid_email': 'Please enter a valid email address',
+      'email_confirmation_required': 'Please check your email to confirm your account',
+      'invalid_recovery_token': 'Invalid or expired reset token',
+      'rate_limit_exceeded': 'Too many attempts. Please try again later.',
+    };
+
+    return errorMap[error.code] || error.message || 'An error occurred';
+  }
+
+  /**
+   * Handle existing user - update profile if needed
+   */
+  private async handleExistingUser(email: string, password: string, fullName?: string, phone?: string, role?: string, omc_id?: string | null, station_id?: string | null, dealer_id?: string | null): Promise<AuthResponse> {
+    try {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      
+      if (!currentUser) {
+        return {
+          success: false,
+          error: 'Please log in first to manage existing users'
+        };
+      }
+
+      return {
+        success: false,
+        error: 'User already exists. Please use "Forgot Password" to reset the password or contact an administrator to update the user profile.'
+      };
+
+    } catch (error: any) {
+      console.error('Error handling existing user:', error);
+      return {
+        success: false,
+        error: 'Failed to handle existing user: ' + error.message
+      };
+    }
+  }
   // ===== EXISTING AUTH METHODS (unchanged) =====
 
   async signUp({ email, password, fullName, phone, role, omc_id, station_id, dealer_id }: SignUpData): Promise<AuthResponse> {

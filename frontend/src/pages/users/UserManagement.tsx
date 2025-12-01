@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -49,7 +49,10 @@ import {
   Mail,
   Phone,
   Eye,
-  EyeOff
+  EyeOff,
+  Building,
+  Store,
+  Fuel
 } from "lucide-react";
 import { api } from "../../lib/api";
 import { ExportButton } from "../../components/export-button";
@@ -132,6 +135,20 @@ interface UsersResponse {
   filters: UserFilters;
 }
 
+// Custom Separator Component following Apple design
+const Separator = ({ className = "" }: { className?: string }) => (
+  <div className={`h-px bg-gray-200 ${className}`} />
+);
+
+// Section Header Component
+const SectionHeader = ({ title, icon }: { title: string; icon?: React.ReactNode }) => (
+  <div className="flex items-center gap-3 mb-4">
+    {icon && <div className="text-gray-500">{icon}</div>}
+    <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <div className="flex-1 h-px bg-gray-200" />
+  </div>
+);
+
 export function UserManagement() {
   // State management
   const [users, setUsers] = useState<EnhancedUser[]>([]);
@@ -143,6 +160,7 @@ export function UserManagement() {
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   
   // Filters and search
   const [filters, setFilters] = useState<UserFilters>({
@@ -204,9 +222,19 @@ export function UserManagement() {
     status: "active" as 'active' | 'inactive'
   });
 
+  // Memoized filter dependencies to prevent unnecessary re-renders
+  const filterDependencies = useMemo(() => ({
+    page: filters.page,
+    limit: filters.limit,
+    search: filters.search,
+    role: filters.role,
+    status: filters.status
+  }), [filters.page, filters.limit, filters.search, filters.role, filters.status]);
+
   // Load initial data
   const loadInitialData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [
         usersResponse, 
@@ -256,6 +284,7 @@ export function UserManagement() {
 
     } catch (error) {
       console.error("Failed to load initial data:", error);
+      setError("Failed to load data. Please check your connection and try again.");
       toast.error("Failed to load data", {
         description: "Please check your connection and try again."
       });
@@ -268,90 +297,97 @@ export function UserManagement() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filterDependencies]);
 
   // Load data when filters change
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
 
-// Enhanced signup function with explicit dealer handling
-const handleCreateUser = async (e: React.FormEvent) => {
-  e.preventDefault();
-  
-  // Validate dealer role has dealer_id
-  if (newUser.role === 'dealer' && !newUser.dealer_id) {
-    toast.error("Validation Error", {
-      description: "Dealer users must be associated with a dealer organization"
-    });
-    return;
-  }
-  
-  setCreating(true);
-  
-  try {
-    // Prepare signup data with explicit null values for dealer role
-    const signupData: any = {
-      email: newUser.email,
-      password: newUser.password,
-      fullName: newUser.full_name,
-      phone: newUser.phone || undefined,
-      role: newUser.role,
-    };
-
-    // Handle entity assignments based on role - EXPLICITLY set to null
-    switch (newUser.role) {
-      case 'dealer':
-        signupData.dealer_id = newUser.dealer_id;
-        // EXPLICITLY set to null to prevent any auto-assignment
-        signupData.station_id = null;
-        signupData.omc_id = null;
-        break;
-      case 'omc':
-        signupData.omc_id = newUser.omc_id || null;
-        signupData.station_id = null;
-        signupData.dealer_id = null;
-        break;
-      case 'station_manager':
-      case 'attendant':
-        signupData.station_id = newUser.station_id || null;
-        signupData.omc_id = null;
-        signupData.dealer_id = null;
-        break;
-      default:
-        // For admin, npa, supervisor - explicitly set to null
-        signupData.station_id = null;
-        signupData.omc_id = null;
-        signupData.dealer_id = null;
+  // Enhanced signup function with explicit dealer handling
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Validate form
+    const validationErrors = validateUserForm(newUser);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error("Validation Error", { description: error }));
+      return;
     }
-
-    console.log('🔄 Creating user with EXPLICIT data:', signupData);
-
-    const result = await api.signup(signupData);
-
-    if (result.success) {
-      toast.success("User created successfully", {
-        description: `${newUser.full_name} has been added to the system.`
+    
+    // Validate dealer role has dealer_id
+    if (newUser.role === 'dealer' && !newUser.dealer_id) {
+      toast.error("Validation Error", {
+        description: "Dealer users must be associated with a dealer organization"
       });
-      
-      await loadInitialData();
-      setShowCreateDialog(false);
-      resetNewUserForm();
-    } else {
+      return;
+    }
+    
+    setCreating(true);
+    
+    try {
+      // Prepare signup data with explicit null values for dealer role
+      const signupData: any = {
+        email: newUser.email,
+        password: newUser.password,
+        fullName: newUser.full_name,
+        phone: newUser.phone || undefined,
+        role: newUser.role,
+      };
+
+      // Handle entity assignments based on role - EXPLICITLY set to null
+      switch (newUser.role) {
+        case 'dealer':
+          signupData.dealer_id = newUser.dealer_id;
+          // EXPLICITLY set to null to prevent any auto-assignment
+          signupData.station_id = null;
+          signupData.omc_id = null;
+          break;
+        case 'omc':
+          signupData.omc_id = newUser.omc_id || null;
+          signupData.station_id = null;
+          signupData.dealer_id = null;
+          break;
+        case 'station_manager':
+        case 'attendant':
+          signupData.station_id = newUser.station_id || null;
+          signupData.omc_id = null;
+          signupData.dealer_id = null;
+          break;
+        default:
+          // For admin, npa, supervisor - explicitly set to null
+          signupData.station_id = null;
+          signupData.omc_id = null;
+          signupData.dealer_id = null;
+      }
+
+      console.log('🔄 Creating user with EXPLICIT data:', signupData);
+
+      const result = await api.signup(signupData);
+
+      if (result.success) {
+        toast.success("User created successfully", {
+          description: `${newUser.full_name} has been added to the system.`
+        });
+        
+        await loadInitialData();
+        setShowCreateDialog(false);
+        resetNewUserForm();
+      } else {
+        toast.error("Failed to create user", {
+          description: result.error
+        });
+      }
+    } catch (error: any) {
       toast.error("Failed to create user", {
-        description: result.error
+        description: error.message
       });
+    } finally {
+      setCreating(false);
     }
-  } catch (error: any) {
-    toast.error("Failed to create user", {
-      description: error.message
-    });
-  } finally {
-    setCreating(false);
-  }
-};
+  };
 
-// Handle user update
+  // Handle user update
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
@@ -469,11 +505,34 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
   // Handle select all
   const handleSelectAll = (checked: boolean) => {
-    if (checked && Array.isArray(users)) {
+    if (checked && Array.isArray(users) && users.length > 0) {
       setSelectedUsers(new Set(users.map(user => user.id)));
     } else {
       setSelectedUsers(new Set());
     }
+  };
+
+  // Form validation
+  const validateUserForm = (user: typeof newUser): string[] => {
+    const errors: string[] = [];
+    
+    if (!user.full_name.trim()) {
+      errors.push("Full name is required");
+    }
+    
+    if (!user.email.includes('@')) {
+      errors.push("Valid email is required");
+    }
+    
+    if (!user.password || user.password.length < 8) {
+      errors.push("Password must be at least 8 characters");
+    }
+    
+    if (user.phone && !/^\+?[\d\s-()]+$/.test(user.phone)) {
+      errors.push("Please enter a valid phone number");
+    }
+    
+    return errors;
   };
 
   // Reset forms
@@ -533,6 +592,19 @@ const handleCreateUser = async (e: React.FormEvent) => {
     return names[role] || role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
+  const getRoleIcon = (role: string) => {
+    const icons: { [key: string]: React.ReactNode } = {
+      admin: <Shield className="w-3 h-3" />,
+      npa: <Building className="w-3 h-3" />,
+      omc: <Fuel className="w-3 h-3" />,
+      dealer: <Store className="w-3 h-3" />,
+      station_manager: <Building className="w-3 h-3" />,
+      attendant: <Users className="w-3 h-3" />,
+      supervisor: <Users className="w-3 h-3" />
+    };
+    return icons[role] || <Users className="w-3 h-3" />;
+  };
+
   const getStatusBadgeVariant = (status: string) => {
     const variants: { [key: string]: "default" | "secondary" | "outline" | "destructive" } = {
       active: "default",
@@ -590,12 +662,18 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
   const canManageUsers = true; // This would come from user permissions in real app
 
+  // Loading state
   if (loading && users.length === 0) {
     return (
       <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-900" />
-          <p className="mt-4 text-gray-600">Loading users...</p>
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 mx-auto bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-900" />
+          </div>
+          <div className="space-y-2">
+            <p className="text-lg font-semibold text-gray-900">Loading Users</p>
+            <p className="text-gray-600 max-w-sm">Please wait while we load the user management system.</p>
+          </div>
         </div>
       </div>
     );
@@ -607,7 +685,7 @@ const handleCreateUser = async (e: React.FormEvent) => {
         
         {/* Header Section */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
+          <div className="space-y-2">
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">User Management</h1>
             <p className="text-gray-600">Manage system users and their permissions</p>
           </div>
@@ -616,8 +694,9 @@ const handleCreateUser = async (e: React.FormEvent) => {
               variant="outline"
               onClick={() => loadInitialData()}
               disabled={loading}
+              className="gap-2"
             >
-              <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
             
@@ -630,47 +709,51 @@ const handleCreateUser = async (e: React.FormEvent) => {
             {canManageUsers && (
               <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
                 <DialogTrigger asChild>
-                  <Button className="bg-blue-900 hover:bg-blue-800">
-                    <UserPlus className="w-4 h-4 mr-2" />
+                  <Button className="bg-blue-900 hover:bg-blue-800 gap-2">
+                    <UserPlus className="w-4 h-4" />
                     Add User
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
-                    <DialogTitle>Create New User</DialogTitle>
+                    <DialogTitle className="flex items-center gap-2">
+                      <UserPlus className="w-5 h-5" />
+                      Create New User
+                    </DialogTitle>
                   </DialogHeader>
+                  
+                  <Separator />
+                  
                   <form onSubmit={handleCreateUser} className="space-y-6">
                     {/* Personal Information Section */}
                     <div className="space-y-4">
-                      <div className="flex items-center space-x-2">
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                        <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                          Personal Information
-                        </span>
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                      </div>
+                      <SectionHeader title="Personal Information" icon={<Users className="w-4 h-4" />} />
                       
-                      <div>
-                        <label className="text-sm font-medium">Full Name *</label>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Full Name</label>
                         <Input
                           value={newUser.full_name}
                           onChange={(e) => setNewUser({ ...newUser, full_name: e.target.value })}
                           required
                           placeholder="Enter full name"
+                          className="bg-gray-50 border-gray-200"
                         />
                       </div>
-                      <div>
-                        <label className="text-sm font-medium">Email *</label>
+                      
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Email Address</label>
                         <Input
                           type="email"
                           value={newUser.email}
                           onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                           required
                           placeholder="user@example.com"
+                          className="bg-gray-50 border-gray-200"
                         />
                       </div>
-                      <div>
-                        <label className="text-sm font-medium">Password *</label>
+                      
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Password</label>
                         <div className="relative">
                           <Input
                             type={showPassword ? "text" : "password"}
@@ -679,56 +762,58 @@ const handleCreateUser = async (e: React.FormEvent) => {
                             required
                             minLength={8}
                             placeholder="Minimum 8 characters"
+                            className="bg-gray-50 border-gray-200 pr-10"
                           />
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
-                            className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                            className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent text-gray-500"
                             onClick={() => setShowPassword(!showPassword)}
                           >
                             {showPassword ? (
-                              <EyeOff className="h-4 w-4 text-gray-500" />
+                              <EyeOff className="h-4 w-4" />
                             ) : (
-                              <Eye className="h-4 w-4 text-gray-500" />
+                              <Eye className="h-4 w-4" />
                             )}
                           </Button>
                         </div>
                       </div>
-                      <div>
-                        <label className="text-sm font-medium">Phone</label>
+                      
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">Phone Number</label>
                         <Input
                           type="tel"
                           value={newUser.phone}
                           onChange={(e) => setNewUser({ ...newUser, phone: e.target.value })}
                           placeholder="+233 XX XXX XXXX"
+                          className="bg-gray-50 border-gray-200"
                         />
                       </div>
                     </div>
 
+                    <Separator />
+
                     {/* Role & Permissions Section */}
                     <div className="space-y-4">
-                      <div className="flex items-center space-x-2">
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                        <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                          Role & Permissions
-                        </span>
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                      </div>
+                      <SectionHeader title="Role & Permissions" icon={<Shield className="w-4 h-4" />} />
 
-                      <div>
-                        <label className="text-sm font-medium">Role *</label>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-700">User Role</label>
                         <Select 
                           value={newUser.role} 
                           onValueChange={(value) => setNewUser({ ...newUser, role: value })}
                         >
-                          <SelectTrigger>
+                          <SelectTrigger className="bg-gray-50 border-gray-200">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             {Array.isArray(availableRoles) && availableRoles.map(role => (
-                              <SelectItem key={role} value={role}>
-                                {getRoleDisplayName(role)}
+                              <SelectItem key={role} value={role} className="flex items-center gap-2">
+                                <span className="flex items-center gap-2">
+                                  {getRoleIcon(role)}
+                                  {getRoleDisplayName(role)}
+                                </span>
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -737,8 +822,10 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
                       {/* Conditional Entity Assignment */}
                       {shouldShowEntityField(newUser.role) && (
-                        <div>
-                          <label className="text-sm font-medium">{getEntityFieldLabel(newUser.role)}</label>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-gray-700">
+                            {getEntityFieldLabel(newUser.role)} Assignment
+                          </label>
                           <Select 
                             value={newUser[`${newUser.role === 'omc' ? 'omc_id' : newUser.role === 'dealer' ? 'dealer_id' : 'station_id'}` as keyof typeof newUser] as string}
                             onValueChange={(value) => {
@@ -746,7 +833,7 @@ const handleCreateUser = async (e: React.FormEvent) => {
                               setNewUser({ ...newUser, [field]: value });
                             }}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger className="bg-gray-50 border-gray-200">
                               <SelectValue placeholder={`Select ${getEntityFieldLabel(newUser.role).toLowerCase()}`} />
                             </SelectTrigger>
                             <SelectContent>
@@ -766,44 +853,50 @@ const handleCreateUser = async (e: React.FormEvent) => {
                       )}
                     </div>
 
+                    <Separator />
+
                     {/* Account Settings Section */}
                     <div className="space-y-4">
-                      <div className="flex items-center space-x-2">
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                        <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                          Account Settings
-                        </span>
-                        <div className="h-px bg-gray-300 flex-1"></div>
-                      </div>
+                      <SectionHeader title="Account Settings" icon={<Settings className="w-4 h-4" />} />
 
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                         <input
                           type="checkbox"
                           id="send-invitation"
                           checked={newUser.send_invitation}
                           onChange={(e) => setNewUser({ ...newUser, send_invitation: e.target.checked })}
-                          className="rounded border-gray-300"
+                          className="rounded border-gray-300 text-blue-900 focus:ring-blue-900"
                         />
-                        <label htmlFor="send-invitation" className="text-sm font-medium">
+                        <label htmlFor="send-invitation" className="text-sm font-medium text-gray-700 flex-1">
                           Send invitation email
                         </label>
                       </div>
                     </div>
 
-                    <Button 
-                      type="submit" 
-                      className="w-full bg-blue-900 hover:bg-blue-800"
-                      disabled={creating}
-                    >
-                      {creating ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Creating...
-                        </>
-                      ) : (
-                        "Create User"
-                      )}
-                    </Button>
+                    <div className="flex gap-3 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowCreateDialog(false)}
+                        className="flex-1"
+                      >
+                        Cancel
+                      </Button>
+                      <Button 
+                        type="submit" 
+                        className="flex-1 bg-blue-900 hover:bg-blue-800"
+                        disabled={creating}
+                      >
+                        {creating ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Creating...
+                          </>
+                        ) : (
+                          "Create User"
+                        )}
+                      </Button>
+                    </div>
                   </form>
                 </DialogContent>
               </Dialog>
@@ -813,38 +906,44 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
         {/* Bulk Actions Bar */}
         {selectedUsers.size > 0 && (
-          <Card className="bg-blue-50 border-blue-200">
+          <Card className="bg-blue-50 border-blue-200 shadow-sm">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  <span className="text-sm font-medium text-blue-900">
+                <div className="flex items-center gap-4">
+                  <div className="bg-blue-100 rounded-full p-2">
+                    <Users className="w-4 h-4 text-blue-900" />
+                  </div>
+                  <span className="text-sm font-semibold text-blue-900">
                     {selectedUsers.size} user{selectedUsers.size > 1 ? 's' : ''} selected
                   </span>
-                  <div className="flex space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleBulkStatusUpdate('active')}
-                    >
-                      <CheckCircle className="w-4 h-4 mr-1" />
-                      Activate
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleBulkStatusUpdate('inactive')}
-                    >
-                      <XCircle className="w-4 h-4 mr-1" />
-                      Deactivate
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setSelectedUsers(new Set())}
-                    >
-                      Clear
-                    </Button>
-                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBulkStatusUpdate('active')}
+                    className="gap-2 border-blue-200 text-blue-900 hover:bg-blue-100"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    Activate
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleBulkStatusUpdate('inactive')}
+                    className="gap-2 border-gray-300 text-gray-700 hover:bg-gray-100"
+                  >
+                    <XCircle className="w-4 h-4" />
+                    Deactivate
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedUsers(new Set())}
+                    className="text-gray-600 hover:text-gray-900"
+                  >
+                    Clear
+                  </Button>
                 </div>
               </div>
             </CardContent>
@@ -852,8 +951,8 @@ const handleCreateUser = async (e: React.FormEvent) => {
         )}
 
         {/* Filters Card */}
-        <Card>
-          <CardContent className="p-4">
+        <Card className="shadow-sm border-gray-200">
+          <CardContent className="p-6">
             <div className="flex flex-col lg:flex-row gap-4">
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
@@ -861,7 +960,7 @@ const handleCreateUser = async (e: React.FormEvent) => {
                   placeholder="Search users by name, email, or phone..."
                   value={filters.search}
                   onChange={(e) => setFilters({ ...filters, search: e.target.value, page: 1 })}
-                  className="pl-10"
+                  className="pl-10 bg-gray-50 border-gray-200"
                 />
               </div>
               
@@ -869,14 +968,15 @@ const handleCreateUser = async (e: React.FormEvent) => {
                 value={filters.role} 
                 onValueChange={(value) => setFilters({ ...filters, role: value, page: 1 })}
               >
-                <SelectTrigger className="w-full lg:w-[200px]">
-                  <Shield className="w-4 h-4 mr-2" />
+                <SelectTrigger className="w-full lg:w-[200px] bg-gray-50 border-gray-200">
+                  <Shield className="w-4 h-4 mr-2 text-gray-500" />
                   <SelectValue placeholder="Filter by role" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Roles</SelectItem>
                   {Array.isArray(availableRoles) && availableRoles.map(role => (
-                    <SelectItem key={role} value={role}>
+                    <SelectItem key={role} value={role} className="flex items-center gap-2">
+                      {getRoleIcon(role)}
                       {getRoleDisplayName(role)}
                     </SelectItem>
                   ))}
@@ -887,16 +987,28 @@ const handleCreateUser = async (e: React.FormEvent) => {
                 value={filters.status} 
                 onValueChange={(value) => setFilters({ ...filters, status: value, page: 1 })}
               >
-                <SelectTrigger className="w-full lg:w-[180px]">
-                  <Filter className="w-4 h-4 mr-2" />
+                <SelectTrigger className="w-full lg:w-[180px] bg-gray-50 border-gray-200">
+                  <Filter className="w-4 h-4 mr-2 text-gray-500" />
                   <SelectValue placeholder="Filter by status" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                  <SelectItem value="suspended">Suspended</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="active" className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-green-600" />
+                    Active
+                  </SelectItem>
+                  <SelectItem value="inactive" className="flex items-center gap-2">
+                    <XCircle className="w-4 h-4 text-gray-600" />
+                    Inactive
+                  </SelectItem>
+                  <SelectItem value="suspended" className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-orange-600" />
+                    Suspended
+                  </SelectItem>
+                  <SelectItem value="pending" className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                    Pending
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -904,73 +1016,111 @@ const handleCreateUser = async (e: React.FormEvent) => {
         </Card>
 
         {/* Users Table Card */}
-        <Card>
-          <CardHeader>
+        <Card className="shadow-sm border-gray-200">
+          <CardHeader className="pb-4">
             <CardTitle className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                System Users ({pagination.total})
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-100 rounded-lg p-2">
+                  <Users className="w-5 h-5 text-blue-900" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">System Users</h2>
+                  <p className="text-sm text-gray-600 mt-1">{pagination.total} total users</p>
+                </div>
               </div>
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              {loading && (
+                <div className="flex items-center gap-2 text-gray-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Updating...</span>
+                </div>
+              )}
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          
+          <Separator />
+          
+          <CardContent className="p-0">
             {!Array.isArray(users) || users.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <Users className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-                <p className="text-lg font-medium">No users found</p>
-                <p className="text-sm">Try adjusting your search criteria or create a new user.</p>
+              <div className="text-center py-16 px-6">
+                <div className="w-24 h-24 mx-auto mb-6 bg-gray-100 rounded-3xl flex items-center justify-center">
+                  <Users className="w-10 h-10 text-gray-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">No Users Found</h3>
+                <p className="text-gray-600 max-w-sm mx-auto mb-6">
+                  {filters.search || filters.role !== 'all' || filters.status !== 'all' 
+                    ? "Try adjusting your search criteria or create a new user."
+                    : "Get started by creating your first user account."
+                  }
+                </p>
+                {canManageUsers && (
+                  <Button 
+                    onClick={() => setShowCreateDialog(true)}
+                    className="bg-blue-900 hover:bg-blue-800 gap-2"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    Add First User
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-12">
+                    <TableRow className="bg-gray-50 hover:bg-gray-50 border-b border-gray-200">
+                      <TableHead className="w-12 pl-6">
                         <input
                           type="checkbox"
                           checked={selectedUsers.size === users.length && users.length > 0}
                           onChange={(e) => handleSelectAll(e.target.checked)}
-                          className="rounded border-gray-300"
+                          className="rounded border-gray-300 text-blue-900 focus:ring-blue-900"
                         />
                       </TableHead>
-                      <TableHead>User</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Association</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Last Login</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className="font-semibold text-gray-900">User</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Role</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Association</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Status</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Last Login</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Created</TableHead>
+                      <TableHead className="text-right font-semibold text-gray-900 pr-6">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {users.map((user) => (
-                      <TableRow key={user.id} className="group">
-                        <TableCell>
+                    {users.map((user, index) => (
+                      <TableRow 
+                        key={user.id} 
+                        className={`group hover:bg-gray-50 ${
+                          index < users.length - 1 ? 'border-b border-gray-100' : ''
+                        }`}
+                      >
+                        <TableCell className="pl-6">
                           <input
                             type="checkbox"
                             checked={selectedUsers.has(user.id)}
                             onChange={(e) => handleUserSelection(user.id, e.target.checked)}
-                            className="rounded border-gray-300"
+                            className="rounded border-gray-300 text-blue-900 focus:ring-blue-900"
                           />
                         </TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium text-gray-900">{user.full_name}</p>
+                            <p className="font-semibold text-gray-900">{user.full_name}</p>
                             <div className="flex items-center text-sm text-gray-600 mt-1">
-                              <Mail className="w-3 h-3 mr-1" />
+                              <Mail className="w-3 h-3 mr-2" />
                               {user.email}
                             </div>
                             {user.phone && (
                               <div className="flex items-center text-sm text-gray-500 mt-1">
-                                <Phone className="w-3 h-3 mr-1" />
+                                <Phone className="w-3 h-3 mr-2" />
                                 {user.phone}
                               </div>
                             )}
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={getRoleBadgeVariant(user.role)}>
+                          <Badge 
+                            variant={getRoleBadgeVariant(user.role)}
+                            className="flex items-center gap-1.5 w-fit"
+                          >
+                            {getRoleIcon(user.role)}
                             {getRoleDisplayName(user.role)}
                           </Badge>
                         </TableCell>
@@ -982,7 +1132,7 @@ const handleCreateUser = async (e: React.FormEvent) => {
                         <TableCell>
                           <Badge 
                             variant={getStatusBadgeVariant(user.status || 'active')}
-                            className="flex items-center gap-1 w-fit"
+                            className="flex items-center gap-1.5 w-fit"
                           >
                             {getStatusIcon(user.status || 'active')}
                             {(user.status || 'active').charAt(0).toUpperCase() + (user.status || 'active').slice(1)}
@@ -997,25 +1147,32 @@ const handleCreateUser = async (e: React.FormEvent) => {
                           </span>
                         </TableCell>
                         <TableCell>
-                          {new Date(user.created_at).toLocaleDateString()}
+                          <span className="text-sm text-gray-600">
+                            {new Date(user.created_at).toLocaleDateString()}
+                          </span>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-2">
+                        <TableCell className="pr-6">
+                          <div className="flex justify-end">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm">
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="h-8 w-8 p-0 hover:bg-gray-200"
+                                >
                                   <MoreVertical className="w-4 h-4" />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
+                              <DropdownMenuContent align="end" className="w-48">
                                 <DropdownMenuItem 
                                   onClick={() => {
                                     setEditingUser(user);
                                     resetEditUserForm(user);
                                     setShowEditDialog(true);
                                   }}
+                                  className="flex items-center gap-2 cursor-pointer"
                                 >
-                                  <Edit className="w-4 h-4 mr-2" />
+                                  <Edit className="w-4 h-4" />
                                   Edit User
                                 </DropdownMenuItem>
                                 <DropdownMenuItem 
@@ -1023,9 +1180,9 @@ const handleCreateUser = async (e: React.FormEvent) => {
                                     setDeletingUser(user);
                                     setShowDeleteDialog(true);
                                   }}
-                                  className="text-red-600"
+                                  className="flex items-center gap-2 cursor-pointer text-red-600 focus:text-red-600"
                                 >
-                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  <Trash2 className="w-4 h-4" />
                                   Delete User
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
@@ -1041,29 +1198,33 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
             {/* Pagination */}
             {pagination.total_pages > 1 && (
-              <div className="flex items-center justify-between mt-6">
-                <div className="text-sm text-gray-600">
-                  Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
-                  {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
-                  {pagination.total} entries
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setFilters({ ...filters, page: pagination.page - 1 })}
-                    disabled={!pagination.has_prev}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setFilters({ ...filters, page: pagination.page + 1 })}
-                    disabled={!pagination.has_next}
-                  >
-                    Next
-                  </Button>
+              <div className="px-6 py-4 border-t border-gray-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-600">
+                    Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
+                    {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
+                    {pagination.total} entries
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFilters({ ...filters, page: pagination.page - 1 })}
+                      disabled={!pagination.has_prev}
+                      className="border-gray-300"
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setFilters({ ...filters, page: pagination.page + 1 })}
+                      disabled={!pagination.has_next}
+                      className="border-gray-300"
+                    >
+                      Next
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1074,69 +1235,69 @@ const handleCreateUser = async (e: React.FormEvent) => {
         <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
           <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Edit User</DialogTitle>
+              <DialogTitle className="flex items-center gap-2">
+                <Edit className="w-5 h-5" />
+                Edit User
+              </DialogTitle>
             </DialogHeader>
+            
+            <Separator />
+            
             {editingUser && (
               <form onSubmit={handleUpdateUser} className="space-y-6">
                 {/* Personal Information Section */}
                 <div className="space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                    <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                      Personal Information
-                    </span>
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                  </div>
+                  <SectionHeader title="Personal Information" icon={<Users className="w-4 h-4" />} />
                   
-                  <div>
-                    <label className="text-sm font-medium">Full Name *</label>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Full Name</label>
                     <Input
                       value={editUser.full_name}
                       onChange={(e) => setEditUser({ ...editUser, full_name: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <label className="text-sm font-medium">Email *</label>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Email Address</label>
                     <Input
                       type="email"
                       value={editUser.email}
                       onChange={(e) => setEditUser({ ...editUser, email: e.target.value })}
                       required
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
-                  <div>
-                    <label className="text-sm font-medium">Phone</label>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Phone Number</label>
                     <Input
                       type="tel"
                       value={editUser.phone}
                       onChange={(e) => setEditUser({ ...editUser, phone: e.target.value })}
+                      className="bg-gray-50 border-gray-200"
                     />
                   </div>
                 </div>
 
+                <Separator />
+
                 {/* Role & Permissions Section */}
                 <div className="space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                    <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                      Role & Permissions
-                    </span>
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                  </div>
+                  <SectionHeader title="Role & Permissions" icon={<Shield className="w-4 h-4" />} />
 
-                  <div>
-                    <label className="text-sm font-medium">Role *</label>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">User Role</label>
                     <Select 
                       value={editUser.role} 
                       onValueChange={(value) => setEditUser({ ...editUser, role: value })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="bg-gray-50 border-gray-200">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         {Array.isArray(availableRoles) && availableRoles.map(role => (
-                          <SelectItem key={role} value={role}>
+                          <SelectItem key={role} value={role} className="flex items-center gap-2">
+                            {getRoleIcon(role)}
                             {getRoleDisplayName(role)}
                           </SelectItem>
                         ))}
@@ -1146,8 +1307,10 @@ const handleCreateUser = async (e: React.FormEvent) => {
 
                   {/* Conditional Entity Assignment */}
                   {shouldShowEntityField(editUser.role) && (
-                    <div>
-                      <label className="text-sm font-medium">{getEntityFieldLabel(editUser.role)}</label>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-gray-700">
+                        {getEntityFieldLabel(editUser.role)} Assignment
+                      </label>
                       <Select 
                         value={editUser[`${editUser.role === 'omc' ? 'omc_id' : editUser.role === 'dealer' ? 'dealer_id' : 'station_id'}` as keyof typeof editUser] as string}
                         onValueChange={(value) => {
@@ -1155,7 +1318,7 @@ const handleCreateUser = async (e: React.FormEvent) => {
                           setEditUser({ ...editUser, [field]: value });
                         }}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="bg-gray-50 border-gray-200">
                           <SelectValue placeholder={`Select ${getEntityFieldLabel(editUser.role).toLowerCase()}`} />
                         </SelectTrigger>
                         <SelectContent>
@@ -1166,56 +1329,63 @@ const handleCreateUser = async (e: React.FormEvent) => {
                           ))}
                         </SelectContent>
                       </Select>
-                      {editUser.role === 'dealer' && (
-                        <p className="text-xs text-gray-500 mt-1">
-                          Dealers inherit station assignment from their dealer organization
-                        </p>
-                      )}
                     </div>
                   )}
                 </div>
 
+                <Separator />
+
                 {/* Account Settings Section */}
                 <div className="space-y-4">
-                  <div className="flex items-center space-x-2">
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                    <span className="text-sm font-medium text-gray-500 bg-gray-50 px-3">
-                      Account Settings
-                    </span>
-                    <div className="h-px bg-gray-300 flex-1"></div>
-                  </div>
+                  <SectionHeader title="Account Settings" icon={<Settings className="w-4 h-4" />} />
 
-                  <div>
-                    <label className="text-sm font-medium">Status</label>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Account Status</label>
                     <Select 
                       value={editUser.status} 
                       onValueChange={(value: 'active' | 'inactive') => setEditUser({ ...editUser, status: value })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="bg-gray-50 border-gray-200">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="active">Active</SelectItem>
-                        <SelectItem value="inactive">Inactive</SelectItem>
+                        <SelectItem value="active" className="flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4 text-green-600" />
+                          Active
+                        </SelectItem>
+                        <SelectItem value="inactive" className="flex items-center gap-2">
+                          <XCircle className="w-4 h-4 text-gray-600" />
+                          Inactive
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
-                <Button 
-                  type="submit" 
-                  className="w-full bg-blue-900 hover:bg-blue-800"
-                  disabled={updating}
-                >
-                  {updating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    "Update User"
-                  )}
-                </Button>
+                <div className="flex gap-3 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowEditDialog(false)}
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    type="submit" 
+                    className="flex-1 bg-blue-900 hover:bg-blue-800"
+                    disabled={updating}
+                  >
+                    {updating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      "Update User"
+                    )}
+                  </Button>
+                </div>
               </form>
             )}
           </DialogContent>
@@ -1225,14 +1395,36 @@ const handleCreateUser = async (e: React.FormEvent) => {
         <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>Delete User</DialogTitle>
+              <DialogTitle className="flex items-center gap-2 text-red-600">
+                <AlertTriangle className="w-5 h-5" />
+                Delete User
+              </DialogTitle>
             </DialogHeader>
+            
+            <Separator />
+            
             {deletingUser && (
-              <div className="space-y-4">
-                <p className="text-gray-600">
-                  Are you sure you want to delete <strong>{deletingUser.full_name}</strong>? 
-                  This action will deactivate their account and cannot be undone.
-                </p>
+              <div className="space-y-6">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium text-red-900">This action cannot be undone</p>
+                      <p className="text-red-700 text-sm mt-1">
+                        The user account will be permanently deactivated and removed from the system.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <p className="text-gray-900 font-medium">{deletingUser.full_name}</p>
+                  <p className="text-gray-600 text-sm mt-1">{deletingUser.email}</p>
+                  <p className="text-gray-600 text-sm">
+                    {getRoleDisplayName(deletingUser.role)} • {getAssociatedEntity(deletingUser)}
+                  </p>
+                </div>
+                
                 <div className="flex gap-3">
                   <Button
                     variant="outline"
@@ -1265,5 +1457,13 @@ const handleCreateUser = async (e: React.FormEvent) => {
     </div>
   );
 }
+
+// Settings icon component
+const Settings = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+  </svg>
+);
 
 export default UserManagement;

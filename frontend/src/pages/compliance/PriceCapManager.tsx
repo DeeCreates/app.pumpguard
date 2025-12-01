@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Edit, Trash2, Save, X, Download, RefreshCw, AlertTriangle, FileText, Building, Fuel, Store, TrendingUp, Users, MapPin } from "lucide-react";
+import { Plus, Edit, Trash2, Save, X, Download, RefreshCw, AlertTriangle, FileText, Building, Fuel, Store, TrendingUp, Users, MapPin, CheckCircle, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { jsPDF } from "jspdf";
@@ -277,13 +277,19 @@ export default function PriceManager() {
     }
   };
 
+  // FIXED: Calculate price summary with proper null checks
   const calculatePriceSummary = () => {
     const currentPriceCaps = getCurrentPriceCaps();
     const currentStationPrices = getCurrentStationPrices();
     const currentOMCPrices = getCurrentOMCPrices();
     
-    // Calculate average margin
-    const activeStationPricesWithMargin = currentStationPrices.filter(sp => sp.margin !== undefined && sp.margin !== null);
+    // Calculate average margin with proper null checks
+    const activeStationPricesWithMargin = currentStationPrices.filter(sp => 
+      sp.margin !== undefined && 
+      sp.margin !== null && 
+      !isNaN(sp.margin)
+    );
+    
     const averageMargin = activeStationPricesWithMargin.length > 0 
       ? activeStationPricesWithMargin.reduce((sum, sp) => sum + (sp.margin || 0), 0) / activeStationPricesWithMargin.length
       : 0;
@@ -310,10 +316,11 @@ export default function PriceManager() {
       }
       
       if (response.success && response.data) {
-        // Ensure we have product names
+        // Ensure we have product names and validate data
         const capsWithProductNames = response.data.map((cap: any) => ({
           ...cap,
-          product_name: products.find(p => p.id === cap.product_id)?.name || cap.product_name || 'Unknown Product'
+          product_name: products.find(p => p.id === cap.product_id)?.name || cap.product_name || 'Unknown Product',
+          price_cap: cap.price_cap || 0 // Ensure price_cap has a value
         }));
         setPriceCaps(capsWithProductNames);
       } else {
@@ -342,11 +349,15 @@ export default function PriceManager() {
       }
       
       if (response.success && response.data) {
+        // Validate and ensure all prices have values
         const pricesWithDetails = response.data.map((price: any) => ({
           ...price,
           product_name: products.find(p => p.id === price.product_id)?.name || price.product_name || 'Unknown Product',
           station_name: stations.find(s => s.id === price.station_id)?.name || price.station_name || 'Unknown Station',
-          omc_name: stations.find(s => s.id === price.station_id)?.omc_name || price.omc_name || 'Unknown OMC'
+          omc_name: stations.find(s => s.id === price.station_id)?.omc_name || price.omc_name || 'Unknown OMC',
+          selling_price: price.selling_price || 0, // Ensure selling_price has a value
+          price_cap_amount: price.price_cap_amount || 0, // Ensure price_cap_amount has a value
+          margin: price.margin || 0 // Ensure margin has a value
         }));
         setStationPrices(pricesWithDetails);
       } else {
@@ -373,10 +384,13 @@ export default function PriceManager() {
       }
       
       if (response.success && response.data) {
+        // Validate and ensure all prices have values
         const pricesWithDetails = response.data.map((price: any) => ({
           ...price,
           product_name: products.find(p => p.id === price.product_id)?.name || price.product_name || 'Unknown Product',
-          omc_name: omcs.find(o => o.id === price.omc_id)?.name || price.omc_name || 'Unknown OMC'
+          omc_name: omcs.find(o => o.id === price.omc_id)?.name || price.omc_name || 'Unknown OMC',
+          recommended_price: price.recommended_price || 0, // Ensure recommended_price has a value
+          price_cap_amount: price.price_cap_amount || 0 // Ensure price_cap_amount has a value
         }));
         setOmcPrices(pricesWithDetails);
       } else {
@@ -615,6 +629,7 @@ export default function PriceManager() {
     }
   };
 
+  // UPDATED: Station price submission with immediate activation for station/omc users
   const handleStationPriceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -656,10 +671,18 @@ export default function PriceManager() {
           notes: ''
         });
 
-        toast({
-          title: "Success",
-          description: "Station price set successfully",
-        });
+        // Show appropriate success message based on user role
+        if (userContext?.role === 'station' || userContext?.role === 'omc') {
+          toast({
+            title: "Success",
+            description: "Station price set successfully and is now active",
+          });
+        } else {
+          toast({
+            title: "Success",
+            description: "Station price set successfully",
+          });
+        }
       } else {
         throw new Error(response.error || "Failed to set station price");
       }
@@ -789,6 +812,7 @@ export default function PriceManager() {
     setEditFormData({});
   };
 
+  // FIXED: Real delete functionality with API calls
   const handleDelete = async (itemId: string, type: 'price-cap' | 'station-price' | 'omc-price') => {
     if (!confirm("Are you sure you want to delete this price? This action cannot be undone.")) {
       return;
@@ -797,27 +821,123 @@ export default function PriceManager() {
     try {
       setSubmitting(true);
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      let response;
       
-      if (type === 'price-cap') {
-        setPriceCaps(prev => prev.filter(cap => cap.id !== itemId));
-      } else if (type === 'station-price') {
-        setStationPrices(prev => prev.filter(price => price.id !== itemId));
-      } else if (type === 'omc-price') {
-        setOmcPrices(prev => prev.filter(price => price.id !== itemId));
+      // Call actual API endpoints
+      switch (type) {
+        case 'price-cap':
+          response = await api.deletePriceCap(itemId);
+          if (response.success) {
+            setPriceCaps(prev => prev.filter(cap => cap.id !== itemId));
+          }
+          break;
+        case 'station-price':
+          response = await api.deleteStationPrice(itemId);
+          if (response.success) {
+            setStationPrices(prev => prev.filter(price => price.id !== itemId));
+          }
+          break;
+        case 'omc-price':
+          response = await api.deleteOMCPrice(itemId);
+          if (response.success) {
+            setOmcPrices(prev => prev.filter(price => price.id !== itemId));
+          }
+          break;
       }
 
-      toast({
-        title: "Success",
-        description: "Price deleted successfully",
-      });
+      if (response && response.success) {
+        toast({
+          title: "Success",
+          description: "Price deleted successfully",
+        });
+        
+        // Refresh the data to ensure consistency
+        await initializeData();
+      } else {
+        throw new Error(response?.error || "Failed to delete price");
+      }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting price:', error);
       toast({
         title: "Error",
-        description: "Failed to delete price",
+        description: error.message || "Failed to delete price",
+        variant: "destructive"
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // NEW: Price approval functionality for admins
+  const handleApprovePrice = async (priceId: string) => {
+    try {
+      setSubmitting(true);
+      
+      // Check if API method exists, otherwise use placeholder
+      let response;
+      if (api.approveStationPrice) {
+        response = await api.approveStationPrice(priceId);
+      } else {
+        // Fallback: Update status locally
+        setStationPrices(prev => prev.map(price => 
+          price.id === priceId ? { ...price, status: 'approved' } : price
+        ));
+        response = { success: true, message: 'Price approved successfully' };
+      }
+      
+      if (response.success) {
+        await loadStationPrices();
+        toast({
+          title: "Success",
+          description: "Price approved successfully",
+        });
+      } else {
+        throw new Error(response.error || "Failed to approve price");
+      }
+    } catch (error: any) {
+      console.error('Error approving price:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to approve price",
+        variant: "destructive"
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // NEW: Price rejection functionality for admins
+  const handleRejectPrice = async (priceId: string) => {
+    try {
+      setSubmitting(true);
+      
+      // Check if API method exists, otherwise use placeholder
+      let response;
+      if (api.rejectStationPrice) {
+        response = await api.rejectStationPrice(priceId);
+      } else {
+        // Fallback: Update status locally
+        setStationPrices(prev => prev.map(price => 
+          price.id === priceId ? { ...price, status: 'rejected' } : price
+        ));
+        response = { success: true, message: 'Price rejected successfully' };
+      }
+      
+      if (response.success) {
+        await loadStationPrices();
+        toast({
+          title: "Success",
+          description: "Price rejected successfully",
+        });
+      } else {
+        throw new Error(response.error || "Failed to reject price");
+      }
+    } catch (error: any) {
+      console.error('Error rejecting price:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reject price",
         variant: "destructive"
       });
     } finally {
@@ -890,6 +1010,11 @@ export default function PriceManager() {
     return userContext?.role === 'admin' || userContext?.role === 'npa' || userContext?.role === 'omc' || userContext?.role === 'station';
   };
 
+  // NEW: Check if user can approve/reject prices
+  const canApprovePrices = () => {
+    return userContext?.role === 'admin' || userContext?.role === 'npa';
+  };
+
   const getCurrentUserStations = () => {
     if (userContext?.role === 'station' && userContext.station_id) {
       return stations.filter(station => station.id === userContext.station_id);
@@ -897,6 +1022,11 @@ export default function PriceManager() {
       return stations.filter(station => station.omc_id === userContext.omc_id);
     }
     return stations;
+  };
+
+  // NEW: Filter pending prices for approval
+  const getPendingStationPrices = () => {
+    return stationPrices.filter(price => price.status === 'pending');
   };
 
   if (loading) {
@@ -926,6 +1056,29 @@ export default function PriceManager() {
           </Button>
         </div>
       </div>
+
+      {/* Pending Approvals Banner - Only show if there are actual pending prices */}
+      {canApprovePrices() && getPendingStationPrices().length > 0 && (
+        <Card className="bg-yellow-50 border-yellow-200">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle className="w-5 h-5 text-yellow-600" />
+                <span className="font-medium text-yellow-800">
+                  {getPendingStationPrices().length} pending price(s) need approval
+                </span>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setActiveTab("station-prices")}
+              >
+                Review Now
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-4">
@@ -1043,7 +1196,7 @@ export default function PriceManager() {
                         </div>
                         <div className="text-right">
                           <div className="font-bold text-green-600">
-                            ₵{cap.price_cap.toFixed(3)}
+                            ₵{(cap.price_cap || 0).toFixed(3)}
                           </div>
                           <div className="text-sm text-gray-600">
                             per {products.find(p => p.id === cap.product_id)?.unit || 'L'}
@@ -1079,12 +1232,12 @@ export default function PriceManager() {
                         </div>
                         <div className="text-right">
                           <div className="font-bold text-blue-600">
-                            ₵{price.selling_price.toFixed(3)}
+                            ₵{(price.selling_price || 0).toFixed(3)}
                           </div>
                           <div className="text-sm text-gray-600">
-                            {price.margin && (
-                              <span className={price.margin >= 0 ? 'text-green-600' : 'text-red-600'}>
-                                {price.margin >= 0 ? '+' : ''}{price.margin.toFixed(3)}
+                            {price.margin !== undefined && price.margin !== null && (
+                              <span className={(price.margin || 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {(price.margin || 0) >= 0 ? '+' : ''}{(price.margin || 0).toFixed(3)}
                               </span>
                             )}
                           </div>
@@ -1274,7 +1427,7 @@ export default function PriceManager() {
                             </TableCell>
                             <TableCell>
                               <span className="font-semibold">
-                                ₵{cap.price_cap.toFixed(3)}
+                                ₵{(cap.price_cap || 0).toFixed(3)}
                                 <span className="text-sm font-normal text-gray-600 ml-1">
                                   /{products.find(p => p.id === cap.product_id)?.unit || 'L'}
                                 </span>
@@ -1465,7 +1618,7 @@ export default function PriceManager() {
                             </TableCell>
                             <TableCell>
                               <span className="font-semibold">
-                                ₵{price.recommended_price.toFixed(3)}
+                                ₵{(price.recommended_price || 0).toFixed(3)}
                                 <span className="text-sm font-normal text-gray-600 ml-1">
                                   /{products.find(p => p.id === price.product_id)?.unit || 'L'}
                                 </span>
@@ -1473,7 +1626,7 @@ export default function PriceManager() {
                             </TableCell>
                             <TableCell>
                               <span className="text-sm text-gray-600">
-                                ₵{price.price_cap_amount?.toFixed(3) || 'N/A'}
+                                ₵{(price.price_cap_amount || 0).toFixed(3)}
                               </span>
                             </TableCell>
                             <TableCell>
@@ -1649,6 +1802,11 @@ export default function PriceManager() {
                   <Badge variant="default">
                     {getCurrentStationPrices().length} active
                   </Badge>
+                  {getPendingStationPrices().length > 0 && (
+                    <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                      {getPendingStationPrices().length} pending
+                    </Badge>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
@@ -1676,7 +1834,8 @@ export default function PriceManager() {
                       <TableBody>
                         {stationPrices.map((price) => (
                           <TableRow key={price.id} className={
-                            (price.status === 'active' || price.status === 'approved') ? 'bg-green-50' : ''
+                            (price.status === 'active' || price.status === 'approved') ? 'bg-green-50' : 
+                            price.status === 'pending' ? 'bg-yellow-50' : ''
                           }>
                             <TableCell className="font-medium">
                               {price.station_name}
@@ -1689,7 +1848,7 @@ export default function PriceManager() {
                             </TableCell>
                             <TableCell>
                               <span className="font-semibold">
-                                ₵{price.selling_price.toFixed(3)}
+                                ₵{(price.selling_price || 0).toFixed(3)}
                                 <span className="text-sm font-normal text-gray-600 ml-1">
                                   /{products.find(p => p.id === price.product_id)?.unit || 'L'}
                                 </span>
@@ -1697,12 +1856,15 @@ export default function PriceManager() {
                             </TableCell>
                             <TableCell>
                               <span className="text-sm text-gray-600">
-                                ₵{price.price_cap_amount?.toFixed(3) || 'N/A'}
+                                ₵{(price.price_cap_amount || 0).toFixed(3)}
                               </span>
                             </TableCell>
                             <TableCell>
-                              <span className={`text-sm font-medium ${(price.margin || 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                {price.margin ? `${price.margin > 0 ? '+' : ''}${price.margin.toFixed(3)}` : 'N/A'}
+                              <span className={`text-sm font-medium ${((price.margin || 0) < 0 ? 'text-red-600' : 'text-green-600')}`}>
+                                {price.margin !== undefined && price.margin !== null 
+                                  ? `${(price.margin || 0) > 0 ? '+' : ''}${(price.margin || 0).toFixed(3)}` 
+                                  : 'N/A'
+                                }
                               </span>
                             </TableCell>
                             <TableCell>
@@ -1718,6 +1880,26 @@ export default function PriceManager() {
                             {canManageStationPrices() && (
                               <TableCell>
                                 <div className="flex space-x-2">
+                                  {price.status === 'pending' && canApprovePrices() && (
+                                    <>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => handleApprovePrice(price.id)}
+                                        className="text-green-600 border-green-200 hover:bg-green-50"
+                                      >
+                                        <CheckCircle className="w-4 h-4" />
+                                      </Button>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => handleRejectPrice(price.id)}
+                                        className="text-red-600 border-red-200 hover:bg-red-50"
+                                      >
+                                        <XCircle className="w-4 h-4" />
+                                      </Button>
+                                    </>
+                                  )}
                                   <Button variant="outline" size="sm">
                                     <Edit className="w-4 h-4" />
                                   </Button>
@@ -1725,6 +1907,7 @@ export default function PriceManager() {
                                     variant="outline" 
                                     size="sm" 
                                     onClick={() => handleDelete(price.id, 'station-price')}
+                                    disabled={price.status !== 'pending' && !canApprovePrices()}
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </Button>

@@ -31,52 +31,26 @@ import {
   RefreshCw,
   Filter,
   Search,
-  Eye,
-  Edit,
   BarChart3,
-  TrendingUp,
   Calendar,
   User,
   LogIn,
-  Zap,
-  Battery,
-  BatteryFull,
-  BatteryLow,
-  BatteryMedium,
-  BatteryWarning,
-  FileText,
-  History,
-  TrendingDown,
   Package,
   ClipboardList,
   Calculator,
-  FileSpreadsheet,
   AlertCircle,
-  Info,
   Building,
-  Store,
-  Shield
+  Shield,
+  Scale,
+  Database,
+  Gauge
 } from "lucide-react";
-import { api } from '@/lib/api';
+import { supabase } from '../../utils/supabase-client';
 import { useToast } from '@/components/ui/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useNavigate } from 'react-router-dom';
 import { Separator } from "@/components/ui/separator";
-
-interface TankStock {
-  id: string;
-  station_id: string;
-  product_id: string;
-  current_volume: number;
-  max_capacity: number;
-  last_delivery_date: string;
-  last_delivery_quantity: number;
-  status: 'adequate' | 'low' | 'critical' | 'empty';
-  updated_at: string;
-  station_name?: string;
-  product_name?: string;
-  product_unit?: string;
-}
+import { usePrices } from '../../contexts/PriceContext';
 
 interface DailyTankStock {
   id: string;
@@ -84,49 +58,63 @@ interface DailyTankStock {
   product_id: string;
   opening_stock: number;
   closing_stock: number;
-  deliveries: number;
+  received: number;
   sales: number;
   variance: number;
   stock_date: string;
   recorded_by: string;
   notes?: string;
   created_at: string;
-  station_name?: string;
-  product_name?: string;
-  product_unit?: string;
+  updated_at: string;
+  products?: {
+    id: string;
+    name: string;
+    unit: string;
+  };
+  stations?: {
+    id: string;
+    name: string;
+  };
 }
 
-interface Delivery {
+interface Product {
   id: string;
-  station_id: string;
-  product_id: string;
-  quantity: number;
-  supplier: string;
-  driver_name: string;
-  vehicle_number: string;
-  delivery_date: string;
-  received_by: string;
-  status: 'scheduled' | 'in_transit' | 'delivered' | 'cancelled';
-  notes?: string;
+  name: string;
+  unit: string;
+  description?: string;
   created_at: string;
-  station_name?: string;
-  product_name?: string;
 }
 
-interface Reconciliation {
+interface Station {
+  id: string;
+  name: string;
+  omc_id: string;
+  dealer_id?: string;
+  address?: string;
+  created_at: string;
+}
+
+interface Pump {
   id: string;
   station_id: string;
-  product_id: string;
-  opening_stock: number;
-  deliveries: number;
-  sales: number;
-  closing_stock: number;
-  variance: number;
-  reconciled_by: string;
-  reconciliation_date: string;
-  notes?: string;
-  station_name?: string;
-  product_name?: string;
+  name: string;
+  number: string;
+  fuel_type: string;
+  status: 'active' | 'inactive' | 'maintenance';
+  current_meter_reading: number;
+  total_dispensed: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface UserContext {
+  id: string;
+  role: 'admin' | 'omc' | 'station_manager' | 'dealer';
+  station_id?: string;
+  omc_id?: string;
+  dealer_id?: string;
+  name: string;
+  email: string;
 }
 
 interface InventoryManagementProps {
@@ -135,72 +123,74 @@ interface InventoryManagementProps {
 }
 
 export default function InventoryManagement({ stationId, compact = false }: InventoryManagementProps) {
-  const [tankStocks, setTankStocks] = useState<TankStock[]>([]);
   const [dailyTankStocks, setDailyTankStocks] = useState<DailyTankStock[]>([]);
-  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  const [reconciliations, setReconciliations] = useState<Reconciliation[]>([]);
+  const [currentStock, setCurrentStock] = useState<DailyTankStock[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userContext, setUserContext] = useState<any>(null);
-  const [availableStations, setAvailableStations] = useState<any[]>([]);
-  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
+  const [userContext, setUserContext] = useState<UserContext | null>(null);
+  const [availableStations, setAvailableStations] = useState<Station[]>([]);
+  const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
+  const [pumps, setPumps] = useState<Pump[]>([]);
+  const [selectedPump, setSelectedPump] = useState<Pump | null>(null);
   const [selectedStation, setSelectedStation] = useState<string>(stationId || 'all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<string>('today');
-  const [showDeliveryDialog, setShowDeliveryDialog] = useState(false);
-  const [showReconciliationDialog, setShowReconciliationDialog] = useState(false);
   const [showDailyStockDialog, setShowDailyStockDialog] = useState(false);
+  const [showReconciliationDialog, setShowReconciliationDialog] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'overview' | 'daily-stock' | 'deliveries' | 'reconciliation'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'daily-stock' | 'reconciliation'>('overview');
   const [authChecked, setAuthChecked] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const { toast } = useToast();
   const navigate = useNavigate();
-
-  const [deliveryForm, setDeliveryForm] = useState({
-    station_id: stationId || '',
-    product_id: '',
-    quantity: '',
-    supplier: '',
-    driver_name: '',
-    vehicle_number: '',
-    delivery_date: new Date().toISOString().split('T')[0],
-    received_by: '',
-    notes: ''
-  });
-
-  const [reconciliationForm, setReconciliationForm] = useState({
-    station_id: stationId || '',
-    product_id: '',
-    opening_stock: '',
-    deliveries: '',
-    sales: '',
-    closing_stock: '',
-    notes: ''
-  });
+  const { getStationPrice, refreshPrices } = usePrices();
 
   const [dailyStockForm, setDailyStockForm] = useState({
     station_id: stationId || '',
     product_id: '',
     opening_stock: '',
     closing_stock: '',
-    deliveries: '',
+    received: '',
     sales: '',
     stock_date: new Date().toISOString().split('T')[0],
+    notes: '',
+    pump_id: '',
+    price_per_liter: ''
+  });
+
+  const [reconciliationForm, setReconciliationForm] = useState({
+    station_id: stationId || '',
+    product_id: '',
+    opening_stock: '',
+    received: '',
+    sales: '',
+    closing_stock: '',
     notes: ''
   });
 
-  // Client-side role-based access control
+  // Safe value getter to prevent undefined errors
+  const safeGet = (value: any, defaultValue: any = 0) => {
+    if (value === null || value === undefined || value === '') return defaultValue;
+    return value;
+  };
+
+  // Safe number formatter
+  const safeFormatNumber = (value: any, defaultValue: any = '0') => {
+    const num = parseFloat(safeGet(value, defaultValue));
+    return isNaN(num) ? defaultValue : num.toLocaleString();
+  };
+
+  // Role-based access control
   const canManageAll = () => {
     return userContext?.role === 'admin';
   };
 
   const canManageOMCStations = () => {
-    return ['admin', 'omc'].includes(userContext?.role);
+    return ['admin', 'omc'].includes(userContext?.role || '');
   };
 
   const canManageStation = () => {
-    return ['admin', 'omc', 'station_manager'].includes(userContext?.role);
+    return ['admin', 'omc', 'station_manager'].includes(userContext?.role || '');
   };
 
   const canViewOnly = () => {
@@ -208,11 +198,11 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
   };
 
   const canCreateRecords = () => {
-    return ['admin', 'omc', 'station_manager'].includes(userContext?.role);
+    return ['admin', 'omc', 'station_manager'].includes(userContext?.role || '');
   };
 
   const canUpdateRecords = () => {
-    return ['admin', 'omc', 'station_manager'].includes(userContext?.role);
+    return ['admin', 'omc', 'station_manager'].includes(userContext?.role || '');
   };
 
   // Get stations based on user role
@@ -221,15 +211,12 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     
     switch (userContext.role) {
       case 'admin':
-        return availableStations; // Admin sees all stations
+        return availableStations;
       case 'omc':
-        // OMC sees only their stations
         return availableStations.filter(station => station.omc_id === userContext.omc_id);
       case 'station_manager':
-        // Station manager sees only their assigned station
         return availableStations.filter(station => station.id === userContext.station_id);
       case 'dealer':
-        // Dealer sees only their assigned stations
         return availableStations.filter(station => station.dealer_id === userContext.dealer_id);
       default:
         return [];
@@ -257,10 +244,53 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     }
   };
 
-  // Check if current selected station is manageable
-  const canManageSelectedStation = () => {
-    if (selectedStation === 'all') return canManageAll();
-    return canManageThisStation(selectedStation);
+  // Get filtered current stock based on selected station
+  const getFilteredCurrentStock = () => {
+    if (selectedStation === 'all') {
+      // For "All Stations", show only manageable stations
+      const manageableStations = getManageableStations();
+      const manageableStationIds = manageableStations.map(s => s.id);
+      return currentStock.filter(stock => manageableStationIds.includes(stock.station_id));
+    } else {
+      // For specific station, show only that station
+      return currentStock.filter(stock => stock.station_id === selectedStation);
+    }
+  };
+
+  // Get filtered daily stocks based on selected station
+  const getFilteredDailyStocks = () => {
+    let filtered = dailyTankStocks;
+
+    // Apply station filter
+    if (selectedStation !== 'all') {
+      filtered = filtered.filter(stock => stock.station_id === selectedStation);
+    } else {
+      // For "All Stations", show only manageable stations
+      const manageableStations = getManageableStations();
+      const manageableStationIds = manageableStations.map(s => s.id);
+      filtered = filtered.filter(stock => manageableStationIds.includes(stock.station_id));
+    }
+
+    // Apply date range filter
+    if (dateRange === 'today') {
+      const today = new Date().toISOString().split('T')[0];
+      filtered = filtered.filter(stock => stock.stock_date === today);
+    } else if (dateRange === 'week') {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      filtered = filtered.filter(stock => new Date(stock.stock_date) >= weekAgo);
+    }
+
+    // Apply search filter
+    if (searchTerm) {
+      filtered = filtered.filter(stock => 
+        safeGet(stock.products?.name, '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        safeGet(stock.stations?.name, '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        safeGet(stock.notes, '').toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    return filtered;
   };
 
   useEffect(() => {
@@ -271,45 +301,70 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     if (authChecked && userContext) {
       loadData();
     }
-  }, [selectedStation, statusFilter, dateRange, authChecked, userContext]);
+  }, [selectedStation, dateRange, authChecked, userContext]);
 
   const checkAuthentication = async () => {
     try {
       setLoading(true);
-      const profileResponse = await api.getCurrentUserProfile();
       
-      if (profileResponse.success && profileResponse.data) {
-        setUserContext(profileResponse.data);
-        
-        // Set default station based on role
-        if (profileResponse.data.role === 'station_manager' && profileResponse.data.station_id) {
-          setSelectedStation(profileResponse.data.station_id);
-          setDeliveryForm(prev => ({ ...prev, station_id: profileResponse.data.station_id }));
-          setReconciliationForm(prev => ({ ...prev, station_id: profileResponse.data.station_id }));
-          setDailyStockForm(prev => ({ ...prev, station_id: profileResponse.data.station_id }));
-        }
-
-        await Promise.all([
-          loadAvailableStations(),
-          loadAvailableProducts()
-        ]);
-
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
         toast({
-          title: "Welcome back!",
-          description: `Logged in as ${profileResponse.data.role}`,
-        });
-      } else {
-        toast({
-          title: "Authentication Error",
+          title: "Authentication Required",
           description: "Please log in to continue",
           variant: "destructive"
         });
+        return;
       }
-    } catch (error) {
+
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
+
+      if (error) {
+        console.error('Error fetching profile:', error);
+        throw error;
+      }
+
+      const userContextData = {
+        id: session.user.id,
+        role: profile.role,
+        station_id: profile.station_id,
+        omc_id: profile.omc_id,
+        dealer_id: profile.dealer_id,
+        name: profile.full_name || session.user.email?.split('@')[0] || 'User',
+        email: session.user.email || ''
+      };
+
+      setUserContext(userContextData);
+
+      if (profile.role === 'station_manager' && profile.station_id) {
+        setSelectedStation(profile.station_id);
+        setDailyStockForm(prev => ({ ...prev, station_id: profile.station_id }));
+        setReconciliationForm(prev => ({ ...prev, station_id: profile.station_id }));
+      }
+
+      await Promise.all([
+        loadAvailableStations(),
+        loadAvailableProducts()
+      ]);
+
+      if (userContextData.station_id) {
+        await loadPumps(userContextData.station_id);
+      }
+
+      toast({
+        title: "Welcome back!",
+        description: `Logged in as ${profile.role}`,
+      });
+    } catch (error: any) {
       console.error('Error checking authentication:', error);
       toast({
-        title: "Connection Error",
-        description: "Unable to verify authentication",
+        title: "Authentication Error",
+        description: "Please log in to continue",
         variant: "destructive"
       });
     } finally {
@@ -323,58 +378,158 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
       let stationsResponse;
       
       if (userContext?.role === 'omc' && userContext.omc_id) {
-        stationsResponse = await api.getStationsByOMC(userContext.omc_id);
+        const { data, error } = await supabase
+          .from('stations')
+          .select('*')
+          .eq('omc_id', userContext.omc_id)
+          .order('name');
+        
+        if (error) throw error;
+        stationsResponse = data;
       } else if (userContext?.role === 'station_manager' && userContext.station_id) {
-        const allStations = await api.getAllStations();
-        if (allStations.success) {
-          stationsResponse = {
-            success: true,
-            data: allStations.data?.filter((station: any) => station.id === userContext.station_id) || []
-          };
-        }
+        const { data, error } = await supabase
+          .from('stations')
+          .select('*')
+          .eq('id', userContext.station_id);
+        
+        if (error) throw error;
+        stationsResponse = data;
       } else if (userContext?.role === 'dealer' && userContext.dealer_id) {
-        const allStations = await api.getAllStations();
-        if (allStations.success) {
-          stationsResponse = {
-            success: true,
-            data: allStations.data?.filter((station: any) => station.dealer_id === userContext.dealer_id) || []
-          };
-        }
+        const { data, error } = await supabase
+          .from('stations')
+          .select('*')
+          .eq('dealer_id', userContext.dealer_id)
+          .order('name');
+        
+        if (error) throw error;
+        stationsResponse = data;
       } else {
-        stationsResponse = await api.getAllStations();
+        const { data, error } = await supabase
+          .from('stations')
+          .select('*')
+          .order('name');
+        
+        if (error) throw error;
+        stationsResponse = data;
       }
 
-      if (stationsResponse?.success && stationsResponse.data) {
-        setAvailableStations(stationsResponse.data);
+      if (stationsResponse) {
+        setAvailableStations(stationsResponse);
         
-        if (!deliveryForm.station_id && stationsResponse.data.length > 0 && userContext?.role !== 'station_manager') {
-          const defaultStationId = stationsResponse.data[0].id;
-          setDeliveryForm(prev => ({ ...prev, station_id: defaultStationId }));
-          setReconciliationForm(prev => ({ ...prev, station_id: defaultStationId }));
+        if (!dailyStockForm.station_id && stationsResponse.length > 0 && userContext?.role !== 'station_manager') {
+          const defaultStationId = stationsResponse[0].id;
           setDailyStockForm(prev => ({ ...prev, station_id: defaultStationId }));
+          setReconciliationForm(prev => ({ ...prev, station_id: defaultStationId }));
         }
       }
     } catch (error) {
       console.error('Error loading stations:', error);
+      toast({
+        title: "Error Loading Stations",
+        description: "Failed to load station data",
+        variant: "destructive"
+      });
     }
   };
 
   const loadAvailableProducts = async () => {
     try {
-      const response = await api.getProducts();
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .order('name');
+
+      if (error) throw error;
       
-      if (response.success && response.data) {
-        setAvailableProducts(response.data);
+      if (data) {
+        setAvailableProducts(data);
         
-        if (response.data.length > 0) {
-          const defaultProductId = response.data[0].id;
-          setDeliveryForm(prev => ({ ...prev, product_id: defaultProductId }));
-          setReconciliationForm(prev => ({ ...prev, product_id: defaultProductId }));
+        if (data.length > 0) {
+          const defaultProductId = data[0].id;
           setDailyStockForm(prev => ({ ...prev, product_id: defaultProductId }));
+          setReconciliationForm(prev => ({ ...prev, product_id: defaultProductId }));
         }
       }
     } catch (error) {
       console.error('Error loading products:', error);
+      toast({
+        title: "Error Loading Products",
+        description: "Failed to load product data",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const loadPumps = async (stationId: string) => {
+    try {
+      console.log('🔄 Loading pumps for station:', stationId);
+      
+      const { data, error } = await supabase
+        .from('pumps')
+        .select('*')
+        .eq('station_id', stationId)
+        .order('number');
+
+      if (error) {
+        console.error('❌ Pump fetch error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Pumps loaded:', data);
+      const pumpsData = data || [];
+      setPumps(pumpsData);
+      
+      if (pumpsData.length > 0) {
+        const defaultPump = pumpsData[0];
+        setSelectedPump(defaultPump);
+        
+        const matchingProduct = availableProducts.find(p => 
+          p.name.toLowerCase() === defaultPump.fuel_type?.toLowerCase()
+        );
+        
+        setDailyStockForm(prev => ({
+          ...prev,
+          pump_id: defaultPump.id,
+          product_id: matchingProduct?.id || ''
+        }));
+      }
+    } catch (error) {
+      console.error('❌ Failed to load pumps:', error);
+      setPumps([]);
+    }
+  };
+
+  const loadCurrentStock = async () => {
+    if (!userContext) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('daily_tank_stocks')
+        .select(`
+          *,
+          products (*),
+          stations (*)
+        `)
+        .order('stock_date', { ascending: false })
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // Get unique latest entries by station and product
+      const uniqueStocks = new Map();
+      data?.forEach(stock => {
+        const key = `${stock.station_id}-${stock.product_id}`;
+        if (!uniqueStocks.has(key)) {
+          uniqueStocks.set(key, stock);
+        }
+      });
+
+      const currentStocks = Array.from(uniqueStocks.values());
+      setCurrentStock(currentStocks || []);
+
+    } catch (error) {
+      console.error('Error loading current stock:', error);
+      setCurrentStock([]);
     }
   };
 
@@ -384,67 +539,115 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     try {
       setLoading(true);
       
-      const filters: any = {};
-      if (selectedStation !== 'all') {
-        filters.station_id = selectedStation;
-      }
+      let query = supabase
+        .from('daily_tank_stocks')
+        .select(`
+          *,
+          products (*),
+          stations (*)
+        `)
+        .order('stock_date', { ascending: false })
+        .order('created_at', { ascending: false });
 
-      const endDate = new Date().toISOString().split('T')[0];
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 7);
-      filters.start_date = startDate.toISOString().split('T')[0];
-      filters.end_date = endDate;
-
-      // Load tank stocks
       if (selectedStation !== 'all') {
-        const stocksResponse = await api.getTankStocks(selectedStation);
-        if (stocksResponse.success) {
-          setTankStocks(stocksResponse.data || []);
+        if (canManageThisStation(selectedStation)) {
+          query = query.eq('station_id', selectedStation);
+        } else {
+          setDailyTankStocks([]);
+          setLoading(false);
+          return;
         }
       } else {
-        setTankStocks([]);
+        const manageableStations = getManageableStations();
+        const manageableStationIds = manageableStations.map(s => s.id);
+        query = query.in('station_id', manageableStationIds);
       }
 
-      // Load daily tank stocks
-      try {
-        const dailyStocksResponse = await api.getDailyTankStocks(filters);
-        if (dailyStocksResponse.success) {
-          setDailyTankStocks(dailyStocksResponse.data || []);
-        }
-      } catch (error) {
-        setDailyTankStocks([]);
+      if (dateRange === 'today') {
+        const today = new Date().toISOString().split('T')[0];
+        query = query.eq('stock_date', today);
+      } else if (dateRange === 'week') {
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        query = query.gte('stock_date', weekAgo.toISOString().split('T')[0]);
       }
 
-      // Load deliveries
-      try {
-        const deliveriesResponse = await api.getDeliveries(filters);
-        if (deliveriesResponse.success) {
-          setDeliveries(deliveriesResponse.data || []);
-        }
-      } catch (error) {
-        setDeliveries([]);
-      }
+      const { data, error } = await query;
 
-      // Load reconciliations
-      try {
-        const reconciliationsResponse = await api.getReconciliations(filters);
-        if (reconciliationsResponse.success) {
-          setReconciliations(reconciliationsResponse.data || []);
-        }
-      } catch (error) {
-        setReconciliations([]);
-      }
+      if (error) throw error;
 
-    } catch (error) {
+      setDailyTankStocks(data || []);
+      await loadCurrentStock();
+
+    } catch (error: any) {
       console.error('Error loading inventory data:', error);
       toast({
         title: "Data Loading Error",
         description: "Failed to load inventory data. Please try again.",
         variant: "destructive"
       });
+      setDailyTankStocks([]);
+      setCurrentStock([]);
     } finally {
       setLoading(false);
     }
+  };
+
+  const checkExistingEntry = async (stationId: string, productId: string, stockDate: string): Promise<boolean> => {
+    try {
+      const { data, error } = await supabase
+        .from('daily_tank_stocks')
+        .select('id')
+        .eq('station_id', stationId)
+        .eq('product_id', productId)
+        .eq('stock_date', stockDate)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error checking existing entry:', error);
+        return false;
+      }
+
+      return !!data;
+    } catch (error) {
+      console.error('Error checking existing entry:', error);
+      return false;
+    }
+  };
+
+  const validateDailyStockForm = (form: typeof dailyStockForm): string[] => {
+    const errors: string[] = [];
+    
+    if (!form.station_id) errors.push('Station selection is required');
+    if (!form.product_id) errors.push('Product selection is required');
+    if (!form.stock_date) errors.push('Stock date is required');
+    
+    if (!form.opening_stock && form.opening_stock !== '0') errors.push('Opening stock is required');
+    if (!form.closing_stock && form.closing_stock !== '0') errors.push('Closing stock is required');
+    
+    const opening = parseFloat(safeGet(form.opening_stock, '0'));
+    const closing = parseFloat(safeGet(form.closing_stock, '0'));
+    const received = parseFloat(safeGet(form.received, '0'));
+    const sales = parseFloat(safeGet(form.sales, '0'));
+    
+    if (isNaN(opening) || isNaN(closing)) {
+      errors.push('Please enter valid stock values');
+      return errors;
+    }
+    
+    if (opening < 0) errors.push('Opening stock cannot be negative');
+    if (closing < 0) errors.push('Closing stock cannot be negative');
+    if (received < 0) errors.push('Received quantity cannot be negative');
+    if (sales < 0) errors.push('Sales cannot be negative');
+    
+    const expectedClosing = opening + received - sales;
+    const variance = Math.abs(closing - expectedClosing);
+    
+    if (variance > expectedClosing * 0.15 && expectedClosing > 0) {
+      errors.push(`Closing stock differs significantly from expected value. Expected: ${expectedClosing.toFixed(2)}, Actual: ${closing.toFixed(2)}`);
+    }
+    
+    return errors;
   };
 
   const handleCreateDailyStock = async () => {
@@ -457,140 +660,104 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
       return;
     }
 
-    try {
-      if (!dailyStockForm.station_id || !dailyStockForm.product_id || 
-          !dailyStockForm.opening_stock || !dailyStockForm.closing_stock) {
-        toast({
-          title: "Validation Error",
-          description: "Please fill in all required fields",
-          variant: "destructive"
-        });
-        return;
-      }
-
-      const dailyStockData = {
-        station_id: dailyStockForm.station_id,
-        product_id: dailyStockForm.product_id,
-        opening_stock: parseFloat(dailyStockForm.opening_stock),
-        closing_stock: parseFloat(dailyStockForm.closing_stock),
-        deliveries: parseFloat(dailyStockForm.deliveries) || 0,
-        sales: parseFloat(dailyStockForm.sales) || 0,
-        stock_date: dailyStockForm.stock_date,
-        notes: dailyStockForm.notes || undefined
-      };
-
-      const response = await api.createDailyTankStock(dailyStockData);
-
-      if (response.success) {
-        setShowDailyStockDialog(false);
-        setDailyStockForm({
-          station_id: stationId || (availableStations.length > 0 ? availableStations[0].id : ''),
-          product_id: availableProducts.length > 0 ? availableProducts[0].id : '',
-          opening_stock: '',
-          closing_stock: '',
-          deliveries: '',
-          sales: '',
-          stock_date: new Date().toISOString().split('T')[0],
-          notes: ''
-        });
-
-        await loadData();
-        
-        const productName = availableProducts.find(p => p.id === dailyStockForm.product_id)?.name;
-        const variance = response.data?.variance || 0;
-        
-        toast({
-          title: "Daily Stock Recorded!",
-          description: `Stock for ${productName} recorded successfully. Variance: ${variance.toFixed(2)}L`,
-        });
-      } else {
-        toast({
-          title: "Recording Failed",
-          description: response.error || "Unable to save daily stock record",
-          variant: "destructive"
-        });
-      }
-    } catch (error: any) {
-      console.error('Error creating daily stock:', error);
-      toast({
-        title: "Unexpected Error",
-        description: error.message || "Failed to record daily stock",
-        variant: "destructive"
-      });
+    const validationErrors = validateDailyStockForm(dailyStockForm);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
+      return;
     }
-  };
 
-  const handleCreateDelivery = async () => {
-    if (!canCreateRecords()) {
+    if (!canManageThisStation(dailyStockForm.station_id)) {
       toast({
         title: "Access Denied",
-        description: "You don't have permission to create deliveries",
+        description: "You don't have permission to manage this station",
         variant: "destructive"
       });
       return;
     }
 
-    try {
-      if (!deliveryForm.station_id || !deliveryForm.product_id || !deliveryForm.quantity || 
-          !deliveryForm.supplier || !deliveryForm.driver_name || !deliveryForm.received_by) {
-        toast({
-          title: "Missing Information",
-          description: "Please fill in all required fields",
-          variant: "destructive"
-        });
-        return;
-      }
+    const existingEntry = await checkExistingEntry(
+      dailyStockForm.station_id,
+      dailyStockForm.product_id,
+      dailyStockForm.stock_date
+    );
 
-      const deliveryData = {
-        station_id: deliveryForm.station_id,
-        product_id: deliveryForm.product_id,
-        quantity: parseFloat(deliveryForm.quantity),
-        supplier: deliveryForm.supplier,
-        driver_name: deliveryForm.driver_name,
-        vehicle_number: deliveryForm.vehicle_number,
-        delivery_date: deliveryForm.delivery_date,
-        received_by: deliveryForm.received_by,
-        notes: deliveryForm.notes || undefined,
-        status: 'delivered' as const
+    setSubmitting(true);
+
+    try {
+      const opening_stock = parseFloat(safeGet(dailyStockForm.opening_stock, '0'));
+      const closing_stock = parseFloat(safeGet(dailyStockForm.closing_stock, '0'));
+      const received = parseFloat(safeGet(dailyStockForm.received, '0'));
+      const sales = parseFloat(safeGet(dailyStockForm.sales, '0'));
+      
+      const expected_closing = opening_stock + received - sales;
+      const variance = closing_stock - expected_closing;
+
+      const dailyStockData = {
+        station_id: dailyStockForm.station_id,
+        product_id: dailyStockForm.product_id,
+        opening_stock,
+        closing_stock,
+        received,
+        sales,
+        variance,
+        stock_date: dailyStockForm.stock_date,
+        recorded_by: userContext?.id,
+        notes: dailyStockForm.notes || `Stock entry${dailyStockForm.pump_id ? ` for pump ${pumps.find(p => p.id === dailyStockForm.pump_id)?.number}` : ''}`
       };
 
-      const response = await api.createDelivery(deliveryData);
-      
-      if (response.success) {
-        setShowDeliveryDialog(false);
-        setDeliveryForm({
-          station_id: stationId || (availableStations.length > 0 ? availableStations[0].id : ''),
-          product_id: availableProducts.length > 0 ? availableProducts[0].id : '',
-          quantity: '',
-          supplier: '',
-          driver_name: '',
-          vehicle_number: '',
-          delivery_date: new Date().toISOString().split('T')[0],
-          received_by: '',
-          notes: ''
-        });
+      let result;
+      if (existingEntry) {
+        const { data, error } = await supabase
+          .from('daily_tank_stocks')
+          .update(dailyStockData)
+          .eq('station_id', dailyStockForm.station_id)
+          .eq('product_id', dailyStockForm.product_id)
+          .eq('stock_date', dailyStockForm.stock_date)
+          .select(`
+            *,
+            products (*),
+            stations (*)
+          `)
+          .single();
 
-        await loadData();
-        
-        const productName = availableProducts.find(p => p.id === deliveryForm.product_id)?.name;
-        toast({
-          title: "Delivery Recorded!",
-          description: `${deliveryForm.quantity}L of ${productName} delivered successfully`,
-        });
+        if (error) throw error;
+        result = data;
       } else {
-        toast({
-          title: "Delivery Failed",
-          description: response.error || "Unable to record delivery",
-          variant: "destructive"
-        });
+        const { data, error } = await supabase
+          .from('daily_tank_stocks')
+          .insert([dailyStockData])
+          .select(`
+            *,
+            products (*),
+            stations (*)
+          `)
+          .single();
+
+        if (error) throw error;
+        result = data;
       }
-    } catch (error: any) {
-      console.error('Error creating delivery:', error);
+
+      setShowDailyStockDialog(false);
+      resetDailyStockForm();
+      
+      await loadData();
+      
+      const productName = availableProducts.find(p => p.id === dailyStockForm.product_id)?.name || 'Product';
+      
       toast({
-        title: "System Error",
-        description: error.message || "Failed to record delivery",
+        title: existingEntry ? "Daily Stock Updated!" : "Daily Stock Recorded!",
+        description: `Stock for ${productName} ${existingEntry ? 'updated' : 'recorded'} successfully. Variance: ${variance.toFixed(2)}L`,
+      });
+
+    } catch (error: any) {
+      console.error('Error creating/updating daily stock:', error);
+      toast({
+        title: "Unexpected Error",
+        description: error.message || "Failed to record daily stock",
         variant: "destructive"
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -615,43 +782,56 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
         return;
       }
 
+      if (!canManageThisStation(reconciliationForm.station_id)) {
+        toast({
+          title: "Access Denied",
+          description: "You don't have permission to manage this station",
+          variant: "destructive"
+        });
+        return;
+      }
+
       const reconciliationData = {
         station_id: reconciliationForm.station_id,
         product_id: reconciliationForm.product_id,
-        opening_stock: parseFloat(reconciliationForm.opening_stock),
-        deliveries: parseFloat(reconciliationForm.deliveries) || 0,
-        sales: parseFloat(reconciliationForm.sales) || 0,
-        closing_stock: parseFloat(reconciliationForm.closing_stock),
-        notes: reconciliationForm.notes || undefined
+        opening_stock: parseFloat(safeGet(reconciliationForm.opening_stock, '0')),
+        received: parseFloat(safeGet(reconciliationForm.received, '0')),
+        sales: parseFloat(safeGet(reconciliationForm.sales, '0')),
+        closing_stock: parseFloat(safeGet(reconciliationForm.closing_stock, '0')),
+        variance: parseFloat(safeGet(reconciliationForm.closing_stock, '0')) - 
+                 (parseFloat(safeGet(reconciliationForm.opening_stock, '0')) + 
+                  parseFloat(safeGet(reconciliationForm.received, '0')) - 
+                  parseFloat(safeGet(reconciliationForm.sales, '0'))),
+        stock_date: new Date().toISOString().split('T')[0],
+        recorded_by: userContext?.id,
+        notes: reconciliationForm.notes || 'Daily reconciliation'
       };
 
-      const response = await api.createReconciliation(reconciliationData);
-      
-      if (response.success) {
-        setShowReconciliationDialog(false);
-        setReconciliationForm({
-          station_id: stationId || (availableStations.length > 0 ? availableStations[0].id : ''),
-          product_id: availableProducts.length > 0 ? availableProducts[0].id : '',
-          opening_stock: '',
-          deliveries: '',
-          sales: '',
-          closing_stock: '',
-          notes: ''
-        });
+      const { data, error } = await supabase
+        .from('daily_tank_stocks')
+        .insert([reconciliationData])
+        .select()
+        .single();
 
-        await loadData();
-        
-        toast({
-          title: "Reconciliation Saved!",
-          description: "Stock reconciliation completed successfully",
-        });
-      } else {
-        toast({
-          title: "Reconciliation Failed",
-          description: response.error || "Unable to save reconciliation",
-          variant: "destructive"
-        });
-      }
+      if (error) throw error;
+      
+      setShowReconciliationDialog(false);
+      setReconciliationForm({
+        station_id: stationId || (availableStations.length > 0 ? availableStations[0].id : ''),
+        product_id: availableProducts.length > 0 ? availableProducts[0].id : '',
+        opening_stock: '',
+        received: '',
+        sales: '',
+        closing_stock: '',
+        notes: ''
+      });
+
+      await loadData();
+      
+      toast({
+        title: "Reconciliation Saved!",
+        description: "Stock reconciliation completed successfully",
+      });
     } catch (error: any) {
       console.error('Error creating reconciliation:', error);
       toast({
@@ -662,46 +842,56 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     }
   };
 
-  const updateDeliveryStatus = async (id: string, status: Delivery['status']) => {
-    if (!canUpdateRecords()) {
+  const handleReconciliationButton = () => {
+    if (!canCreateRecords()) {
       toast({
         title: "Access Denied",
-        description: "You don't have permission to update deliveries",
+        description: "You don't have permission to perform reconciliation",
         variant: "destructive"
       });
       return;
     }
-
-    try {
-      const response = await api.updateDelivery(id, { status });
-      
-      if (response.success) {
-        await loadData();
-        toast({
-          title: "Status Updated",
-          description: `Delivery marked as ${status.replace('_', ' ')}`,
-        });
-      } else {
-        toast({
-          title: "Update Failed",
-          description: response.error || "Unable to update delivery status",
-          variant: "destructive"
-        });
-      }
-    } catch (error) {
-      console.error('Error updating delivery status:', error);
-      toast({
-        title: "Update Error",
-        description: "Failed to update delivery status",
-        variant: "destructive"
-      });
-    }
+    setShowReconciliationDialog(true);
   };
 
   const exportInventoryData = async () => {
     try {
       setExporting(true);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const dataToExport = getFilteredDailyStocks().map(stock => ({
+        Date: safeGet(stock.stock_date, ''),
+        Station: safeGet(stock.stations?.name, 'Unknown Station'),
+        Product: safeGet(stock.products?.name, 'Unknown Product'),
+        'Opening Stock': safeGet(stock.opening_stock, 0),
+        'Received': safeGet(stock.received, 0),
+        Sales: safeGet(stock.sales, 0),
+        'Closing Stock': safeGet(stock.closing_stock, 0),
+        Variance: safeGet(stock.variance, 0),
+        'Recorded By': safeGet(stock.recorded_by, ''),
+        Notes: safeGet(stock.notes, '')
+      }));
+
+      if (dataToExport.length === 0) {
+        toast.error('No data to export');
+        return;
+      }
+
+      const headers = Object.keys(dataToExport[0]).join(',');
+      const csv = [headers, ...dataToExport.map(row => 
+        Object.values(row).map(value => 
+          typeof value === 'string' && value.includes(',') ? `"${value}"` : value
+        ).join(',')
+      )].join('\n');
+      
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `inventory-data-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
       
       toast({
         title: "Export Complete!",
@@ -722,83 +912,91 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     navigate('/login');
   };
 
-  const getStockStatusColor = (status: string) => {
-    switch (status) {
-      case 'adequate': return 'bg-green-100 text-green-700 border-green-200';
-      case 'low': return 'bg-yellow-100 text-yellow-700 border-yellow-200';
-      case 'critical': return 'bg-orange-100 text-orange-700 border-orange-200';
-      case 'empty': return 'bg-red-100 text-red-700 border-red-200';
-      default: return 'bg-gray-100 text-gray-700 border-gray-200';
-    }
-  };
+  const resetDailyStockForm = () => {
+    const defaultStation = stationId || (availableStations.length > 0 ? availableStations[0].id : '');
+    const defaultProduct = availableProducts.length > 0 ? availableProducts[0].id : '';
+    
+    const currentPrice = getStationPrice(defaultStation, defaultProduct) || 0;
 
-  const getStockStatusIcon = (status: string) => {
-    switch (status) {
-      case 'adequate': return <BatteryFull className="w-4 h-4" />;
-      case 'low': return <BatteryMedium className="w-4 h-4" />;
-      case 'critical': return <BatteryLow className="w-4 h-4" />;
-      case 'empty': return <BatteryWarning className="w-4 h-4" />;
-      default: return <Battery className="w-4 h-4" />;
-    }
-  };
-
-  const getDeliveryStatusColor = (status: string) => {
-    switch (status) {
-      case 'delivered': return 'bg-green-100 text-green-700 border-green-200';
-      case 'in_transit': return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'scheduled': return 'bg-yellow-100 text-yellow-700 border-yellow-200';
-      case 'cancelled': return 'bg-red-100 text-red-700 border-red-200';
-      default: return 'bg-gray-100 text-gray-700 border-gray-200';
-    }
+    setDailyStockForm({
+      station_id: defaultStation,
+      product_id: defaultProduct,
+      opening_stock: '',
+      closing_stock: '',
+      received: '',
+      sales: '',
+      stock_date: new Date().toISOString().split('T')[0],
+      notes: '',
+      pump_id: selectedPump?.id || '',
+      price_per_liter: currentPrice.toString()
+    });
   };
 
   const getVarianceColor = (variance: number) => {
-    if (variance === 0) return 'text-green-600 bg-green-50';
-    if (Math.abs(variance) <= 100) return 'text-yellow-600 bg-yellow-50';
-    return 'text-red-600 bg-red-50';
+    if (variance === 0) return 'bg-green-100 text-green-700 border-green-200';
+    if (Math.abs(variance) <= 100) return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+    return 'bg-red-100 text-red-700 border-red-200';
   };
 
+  // Calculate stock metrics based on filtered data
   const calculateStockMetrics = () => {
-    const totalStock = tankStocks.reduce((sum, stock) => sum + stock.current_volume, 0);
-    const lowStockCount = tankStocks.filter(stock => stock.status === 'low' || stock.status === 'critical').length;
-    const averageCapacity = tankStocks.length > 0 
-      ? tankStocks.reduce((sum, stock) => sum + (stock.current_volume / stock.max_capacity * 100), 0) / tankStocks.length
-      : 0;
-    const totalCapacity = tankStocks.reduce((sum, stock) => sum + stock.max_capacity, 0);
-
-    return { totalStock, lowStockCount, averageCapacity, totalCapacity };
-  };
-
-  const calculateDailyStockMetrics = () => {
-    const today = new Date().toISOString().split('T')[0];
-    const todayStocks = dailyTankStocks.filter(stock => stock.stock_date === today);
+    const filteredDailyStocks = getFilteredDailyStocks();
+    const filteredCurrentStock = getFilteredCurrentStock();
     
-    const totalVariance = todayStocks.reduce((sum, stock) => sum + stock.variance, 0);
-    const perfectMatches = todayStocks.filter(stock => stock.variance === 0).length;
-    const withVariance = todayStocks.filter(stock => stock.variance !== 0).length;
+    const today = new Date().toISOString().split('T')[0];
+    const todayStocks = filteredDailyStocks.filter(stock => stock.stock_date === today);
+    
+    const totalVariance = todayStocks.reduce((sum, stock) => sum + safeGet(stock.variance, 0), 0);
+    const perfectMatches = todayStocks.filter(stock => safeGet(stock.variance, 0) === 0).length;
+    const withVariance = todayStocks.filter(stock => safeGet(stock.variance, 0) !== 0).length;
+    
+    // Calculate total stock from filtered current stock
+    const totalStock = filteredCurrentStock.reduce((sum, stock) => sum + safeGet(stock.closing_stock, 0), 0);
 
-    return { totalVariance, perfectMatches, withVariance, todayStocksCount: todayStocks.length };
+    return { 
+      totalStock, 
+      totalVariance, 
+      perfectMatches, 
+      withVariance, 
+      todayStocksCount: todayStocks.length,
+      filteredDailyStocksCount: filteredDailyStocks.length
+    };
   };
 
-  // Filter data based on search and filters
-  const filteredDeliveries = deliveries.filter(delivery =>
-    delivery.driver_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    delivery.supplier.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    delivery.vehicle_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    delivery.product_name?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  useEffect(() => {
+    if (selectedPump && availableProducts.length > 0) {
+      const matchingProduct = availableProducts.find(p => 
+        p.name.toLowerCase() === selectedPump.fuel_type?.toLowerCase()
+      );
+      
+      if (matchingProduct) {
+        const currentPrice = getStationPrice(dailyStockForm.station_id, matchingProduct.id) || 0;
+        
+        setDailyStockForm(prev => ({
+          ...prev,
+          pump_id: selectedPump.id,
+          product_id: matchingProduct.id,
+          price_per_liter: currentPrice.toString()
+        }));
+      }
+    }
+  }, [selectedPump, availableProducts, dailyStockForm.station_id, getStationPrice]);
 
-  const filteredDailyStocks = dailyTankStocks.filter(stock => {
-    if (dateRange === 'today') {
-      return stock.stock_date === new Date().toISOString().split('T')[0];
+  useEffect(() => {
+    if (dailyStockForm.product_id && dailyStockForm.station_id) {
+      const currentPrice = getStationPrice(dailyStockForm.station_id, dailyStockForm.product_id) || 0;
+      setDailyStockForm(prev => ({
+        ...prev,
+        price_per_liter: currentPrice.toString()
+      }));
     }
-    if (dateRange === 'week') {
-      const weekAgo = new Date();
-      weekAgo.setDate(weekAgo.getDate() - 7);
-      return new Date(stock.stock_date) >= weekAgo;
+  }, [dailyStockForm.product_id, dailyStockForm.station_id, getStationPrice]);
+
+  useEffect(() => {
+    if (dailyStockForm.station_id && dailyStockForm.station_id !== 'all') {
+      loadPumps(dailyStockForm.station_id);
     }
-    return true;
-  });
+  }, [dailyStockForm.station_id]);
 
   // Loading skeletons
   const StatsSkeleton = () => (
@@ -868,7 +1066,7 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
           {canManageStation() && (
             <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
               <Plus className="w-4 h-4 mr-2" />
-              Record Delivery
+              Record Stock
             </Button>
           )}
         </div>
@@ -877,20 +1075,20 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
           <StatsSkeleton />
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            {tankStocks.slice(0, 2).map((stock) => (
+            {getFilteredCurrentStock().slice(0, 2).map((stock) => (
               <Card key={stock.id}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-gray-600">{stock.product_name}</p>
+                      <p className="text-sm font-medium text-gray-600">{safeGet(stock.products?.name, 'Product')}</p>
                       <p className="text-lg font-bold">
-                        {stock.current_volume.toLocaleString()} {stock.product_unit}
+                        {safeFormatNumber(stock.closing_stock)} {safeGet(stock.products?.unit, 'L')}
                       </p>
-                      <Badge variant="outline" className={getStockStatusColor(stock.status)}>
-                        {stock.status}
+                      <Badge variant="outline" className={getVarianceColor(safeGet(stock.variance, 0))}>
+                        Variance: {safeGet(stock.variance, 0) >= 0 ? '+' : ''}{safeGet(stock.variance, 0).toFixed(2)}
                       </Badge>
                     </div>
-                    {getStockStatusIcon(stock.status)}
+                    <Database className="w-4 h-4 text-gray-400" />
                   </div>
                 </CardContent>
               </Card>
@@ -901,12 +1099,13 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
     );
   }
 
-  const { totalStock, lowStockCount, averageCapacity, totalCapacity } = calculateStockMetrics();
-  const { totalVariance, perfectMatches, withVariance, todayStocksCount } = calculateDailyStockMetrics();
+  const { totalStock, totalVariance, perfectMatches, withVariance, todayStocksCount, filteredDailyStocksCount } = calculateStockMetrics();
+  const filteredDailyStocks = getFilteredDailyStocks();
+  const filteredCurrentStock = getFilteredCurrentStock();
 
   return (
     <div className="space-y-6">
-      {/* Header with Role Badge */}
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-3 mb-2">
@@ -918,7 +1117,7 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
               {userContext?.role}
             </Badge>
           </div>
-          <p className="text-gray-600">Track fuel stock, deliveries, and daily reconciliation</p>
+          <p className="text-gray-600">Track fuel stock and daily reconciliation</p>
           <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
             <Building className="w-4 h-4" />
             <span>Station: {selectedStation === 'all' ? 'All Stations' : availableStations.find(s => s.id === selectedStation)?.name}</span>
@@ -954,14 +1153,14 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                     Daily Stock
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl">
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                       <ClipboardList className="w-5 h-5" />
                       Record Daily Stock
                     </DialogTitle>
                     <DialogDescription>
-                      Record opening and closing stock for accurate daily tracking
+                      Record opening and closing stock. Multiple entries allowed for same day.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
@@ -970,7 +1169,17 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                         <Label>Station *</Label>
                         <Select
                           value={dailyStockForm.station_id}
-                          onValueChange={(value) => setDailyStockForm({ ...dailyStockForm, station_id: value })}
+                          onValueChange={(value) => {
+                            setDailyStockForm({ ...dailyStockForm, station_id: value });
+                            loadPumps(value);
+                            if (dailyStockForm.product_id) {
+                              const currentPrice = getStationPrice(value, dailyStockForm.product_id) || 0;
+                              setDailyStockForm(prev => ({
+                                ...prev,
+                                price_per_liter: currentPrice.toString()
+                              }));
+                            }
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select station" />
@@ -986,22 +1195,88 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                       </div>
 
                       <div>
+                        <Label>Pump (Optional)</Label>
+                        <Select
+                          value={dailyStockForm.pump_id}
+                          onValueChange={(value) => {
+                            const pump = pumps.find(p => p.id === value);
+                            setSelectedPump(pump || null);
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select pump" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {pumps.length > 0 ? (
+                              pumps.map((pump) => (
+                                <SelectItem key={pump.id} value={pump.id}>
+                                  {pump.name} (No: {pump.number}) - {pump.fuel_type}
+                                </SelectItem>
+                              ))
+                            ) : (
+                              <SelectItem value="no-pumps" disabled>
+                                No pumps available
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {selectedPump && (
+                      <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-medium text-blue-800">Selected Pump: {selectedPump.name}</p>
+                            <p className="text-sm text-blue-600">Pump Number: {selectedPump.number}</p>
+                            <p className="text-sm text-blue-600">Fuel Type: {selectedPump.fuel_type}</p>
+                            <p className="text-sm text-blue-600">Current Meter: {safeGet(selectedPump.current_meter_reading, 0)}L</p>
+                          </div>
+                          <Gauge className="w-8 h-8 text-blue-600" />
+                        </div>
+                      </div>
+                    )}
+
+                    <Separator />
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
                         <Label>Product *</Label>
                         <Select
                           value={dailyStockForm.product_id}
-                          onValueChange={(value) => setDailyStockForm({ ...dailyStockForm, product_id: value })}
+                          onValueChange={(value) => {
+                            const price = getStationPrice(dailyStockForm.station_id, value) || 0;
+                            setDailyStockForm({ 
+                              ...dailyStockForm, 
+                              product_id: value,
+                              price_per_liter: price.toString()
+                            });
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select product" />
                           </SelectTrigger>
                           <SelectContent>
-                            {availableProducts.map(product => (
+                            {availableProducts.map((product) => (
                               <SelectItem key={product.id} value={product.id}>
                                 {product.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+
+                      <div>
+                        <Label>Current Price (₵/L)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={dailyStockForm.price_per_liter}
+                          onChange={(e) => setDailyStockForm({ ...dailyStockForm, price_per_liter: e.target.value })}
+                          placeholder="0.00"
+                          className="bg-gray-50"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Current pump price for reference</p>
                       </div>
                     </div>
 
@@ -1032,42 +1307,72 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="space-y-2">
-                        <Label>Opening Stock (L) *</Label>
+                        <Label>Opening Stock *</Label>
                         <Input
                           type="number"
+                          step="0.01"
                           value={dailyStockForm.opening_stock}
                           onChange={(e) => setDailyStockForm({ ...dailyStockForm, opening_stock: e.target.value })}
                           placeholder="0"
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Deliveries (L)</Label>
+                        <Label>Received</Label>
                         <Input
                           type="number"
-                          value={dailyStockForm.deliveries}
-                          onChange={(e) => setDailyStockForm({ ...dailyStockForm, deliveries: e.target.value })}
+                          step="0.01"
+                          value={dailyStockForm.received}
+                          onChange={(e) => setDailyStockForm({ ...dailyStockForm, received: e.target.value })}
                           placeholder="0"
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Sales (L)</Label>
+                        <Label>Sales</Label>
                         <Input
                           type="number"
+                          step="0.01"
                           value={dailyStockForm.sales}
                           onChange={(e) => setDailyStockForm({ ...dailyStockForm, sales: e.target.value })}
                           placeholder="0"
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label>Closing Stock (L) *</Label>
+                        <Label>Closing Stock *</Label>
                         <Input
                           type="number"
+                          step="0.01"
                           value={dailyStockForm.closing_stock}
                           onChange={(e) => setDailyStockForm({ ...dailyStockForm, closing_stock: e.target.value })}
                           placeholder="0"
                         />
                       </div>
                     </div>
+
+                    {dailyStockForm.opening_stock && dailyStockForm.closing_stock && (
+                      <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-blue-800">Expected Closing Stock:</p>
+                            <p className="text-lg font-bold text-blue-900">
+                              {(
+                                parseFloat(safeGet(dailyStockForm.opening_stock, '0')) + 
+                                parseFloat(safeGet(dailyStockForm.received, '0')) - 
+                                parseFloat(safeGet(dailyStockForm.sales, '0'))
+                              ).toFixed(2)} {availableProducts.find(p => p.id === dailyStockForm.product_id)?.unit || 'L'}
+                            </p>
+                            <p className="text-sm text-blue-700">
+                              Variance: {(
+                                parseFloat(safeGet(dailyStockForm.closing_stock, '0')) - 
+                                (parseFloat(safeGet(dailyStockForm.opening_stock, '0')) + 
+                                 parseFloat(safeGet(dailyStockForm.received, '0')) - 
+                                 parseFloat(safeGet(dailyStockForm.sales, '0')))
+                              ).toFixed(2)} {availableProducts.find(p => p.id === dailyStockForm.product_id)?.unit || 'L'}
+                            </p>
+                          </div>
+                          <Calculator className="w-6 h-6 text-blue-600" />
+                        </div>
+                      </div>
+                    )}
 
                     <Separator />
 
@@ -1085,31 +1390,38 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                     <DialogFooter>
                       <Button
                         onClick={handleCreateDailyStock}
+                        disabled={submitting}
                         className="w-full bg-green-600 hover:bg-green-700 flex items-center gap-2"
                       >
-                        <CheckCircle className="w-4 h-4" />
-                        Save Daily Stock
+                        {submitting ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle className="w-4 h-4" />
+                        )}
+                        {submitting ? 'Saving...' : 'Save Daily Stock'}
                       </Button>
                     </DialogFooter>
                   </div>
                 </DialogContent>
               </Dialog>
 
-              <Dialog open={showDeliveryDialog} onOpenChange={setShowDeliveryDialog}>
+              <Dialog open={showReconciliationDialog} onOpenChange={setShowReconciliationDialog}>
                 <DialogTrigger asChild>
-                  <Button className="bg-blue-600 hover:bg-blue-700 flex items-center gap-2">
-                    <Truck className="w-4 h-4" />
-                    Record Delivery
+                  <Button 
+                    className="bg-purple-600 hover:bg-purple-700 flex items-center gap-2"
+                  >
+                    <Scale className="w-4 h-4" />
+                    Reconciliation
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl">
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
-                      <Truck className="w-5 h-5" />
-                      Record New Delivery
+                      <Scale className="w-5 h-5" />
+                      Stock Reconciliation
                     </DialogTitle>
                     <DialogDescription>
-                      Enter delivery details for fuel stock management
+                      Perform daily stock reconciliation to identify variances.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
@@ -1117,8 +1429,8 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                       <div>
                         <Label>Station *</Label>
                         <Select
-                          value={deliveryForm.station_id}
-                          onValueChange={(value) => setDeliveryForm({ ...deliveryForm, station_id: value })}
+                          value={reconciliationForm.station_id}
+                          onValueChange={(value) => setReconciliationForm({ ...reconciliationForm, station_id: value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select station" />
@@ -1132,18 +1444,17 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                           </SelectContent>
                         </Select>
                       </div>
-
                       <div>
                         <Label>Product *</Label>
                         <Select
-                          value={deliveryForm.product_id}
-                          onValueChange={(value) => setDeliveryForm({ ...deliveryForm, product_id: value })}
+                          value={reconciliationForm.product_id}
+                          onValueChange={(value) => setReconciliationForm({ ...reconciliationForm, product_id: value })}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select product" />
                           </SelectTrigger>
                           <SelectContent>
-                            {availableProducts.map(product => (
+                            {availableProducts.map((product) => (
                               <SelectItem key={product.id} value={product.id}>
                                 {product.name}
                               </SelectItem>
@@ -1155,70 +1466,74 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
 
                     <Separator />
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>Quantity *</Label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="space-y-2">
+                        <Label>Opening Stock *</Label>
                         <Input
                           type="number"
-                          value={deliveryForm.quantity}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, quantity: e.target.value })}
+                          step="0.01"
+                          value={reconciliationForm.opening_stock}
+                          onChange={(e) => setReconciliationForm({ ...reconciliationForm, opening_stock: e.target.value })}
                           placeholder="0"
                         />
                       </div>
-
-                      <div>
-                        <Label>Supplier *</Label>
+                      <div className="space-y-2">
+                        <Label>Received</Label>
                         <Input
-                          value={deliveryForm.supplier}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, supplier: e.target.value })}
-                          placeholder="Supplier name"
+                          type="number"
+                          step="0.01"
+                          value={reconciliationForm.received}
+                          onChange={(e) => setReconciliationForm({ ...reconciliationForm, received: e.target.value })}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Sales</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={reconciliationForm.sales}
+                          onChange={(e) => setReconciliationForm({ ...reconciliationForm, sales: e.target.value })}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Closing Stock *</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={reconciliationForm.closing_stock}
+                          onChange={(e) => setReconciliationForm({ ...reconciliationForm, closing_stock: e.target.value })}
+                          placeholder="0"
                         />
                       </div>
                     </div>
 
-                    <Separator />
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>Driver Name *</Label>
-                        <Input
-                          value={deliveryForm.driver_name}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, driver_name: e.target.value })}
-                          placeholder="Driver name"
-                        />
+                    {reconciliationForm.opening_stock && reconciliationForm.closing_stock && (
+                      <div className="p-3 bg-purple-50 rounded-lg border border-purple-200">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-purple-800">Reconciliation Result:</p>
+                            <p className="text-lg font-bold text-purple-900">
+                              Variance: {(
+                                parseFloat(safeGet(reconciliationForm.closing_stock, '0')) - 
+                                (parseFloat(safeGet(reconciliationForm.opening_stock, '0')) + 
+                                 parseFloat(safeGet(reconciliationForm.received, '0')) - 
+                                 parseFloat(safeGet(reconciliationForm.sales, '0')))
+                              ).toFixed(2)} {availableProducts.find(p => p.id === reconciliationForm.product_id)?.unit || 'L'}
+                            </p>
+                            <p className="text-sm text-purple-700">
+                              Expected: {(
+                                parseFloat(safeGet(reconciliationForm.opening_stock, '0')) + 
+                                parseFloat(safeGet(reconciliationForm.received, '0')) - 
+                                parseFloat(safeGet(reconciliationForm.sales, '0'))
+                              ).toFixed(2)} {availableProducts.find(p => p.id === reconciliationForm.product_id)?.unit || 'L'}
+                            </p>
+                          </div>
+                          <Calculator className="w-6 h-6 text-purple-600" />
+                        </div>
                       </div>
-
-                      <div>
-                        <Label>Vehicle Number</Label>
-                        <Input
-                          value={deliveryForm.vehicle_number}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, vehicle_number: e.target.value })}
-                          placeholder="Vehicle number"
-                        />
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>Delivery Date *</Label>
-                        <Input
-                          type="date"
-                          value={deliveryForm.delivery_date}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, delivery_date: e.target.value })}
-                        />
-                      </div>
-
-                      <div>
-                        <Label>Received By *</Label>
-                        <Input
-                          value={deliveryForm.received_by}
-                          onChange={(e) => setDeliveryForm({ ...deliveryForm, received_by: e.target.value })}
-                          placeholder="Receiver name"
-                        />
-                      </div>
-                    </div>
+                    )}
 
                     <Separator />
 
@@ -1227,19 +1542,24 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                       <textarea
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         rows={3}
-                        value={deliveryForm.notes}
-                        onChange={(e) => setDeliveryForm({ ...deliveryForm, notes: e.target.value })}
-                        placeholder="Additional notes..."
+                        value={reconciliationForm.notes}
+                        onChange={(e) => setReconciliationForm({ ...reconciliationForm, notes: e.target.value })}
+                        placeholder="Notes about the reconciliation..."
                       />
                     </div>
 
                     <DialogFooter>
                       <Button
-                        onClick={handleCreateDelivery}
-                        className="w-full bg-blue-600 hover:bg-blue-700 flex items-center gap-2"
+                        onClick={handleCreateReconciliation}
+                        disabled={submitting}
+                        className="w-full bg-purple-600 hover:bg-purple-700 flex items-center gap-2"
                       >
-                        <Truck className="w-4 h-4" />
-                        Record Delivery
+                        {submitting ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <CheckCircle className="w-4 h-4" />
+                        )}
+                        {submitting ? 'Saving...' : 'Save Reconciliation'}
                       </Button>
                     </DialogFooter>
                   </div>
@@ -1250,14 +1570,13 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
         </div>
       </div>
 
-      {/* Enhanced Navigation Tabs with Separators */}
+      {/* Navigation Tabs */}
       <Card>
         <CardContent className="p-0">
           <nav className="flex space-x-1 p-1 bg-gray-100 rounded-lg">
             {[
               { id: 'overview', label: 'Stock Overview', icon: BarChart3 },
               { id: 'daily-stock', label: 'Daily Stock', icon: ClipboardList },
-              { id: 'deliveries', label: 'Deliveries', icon: Truck },
               { id: 'reconciliation', label: 'Reconciliation', icon: Calculator }
             ].map((tab, index) => (
               <React.Fragment key={tab.id}>
@@ -1272,7 +1591,7 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   <tab.icon className="w-4 h-4" />
                   {tab.label}
                 </button>
-                {index < 3 && (
+                {index < 2 && (
                   <div className="flex items-center">
                     <Separator orientation="vertical" className="h-6" />
                   </div>
@@ -1283,7 +1602,7 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
         </CardContent>
       </Card>
 
-      {/* Filters Section with Separators */}
+      {/* Filters */}
       {(userContext?.role === 'admin' || userContext?.role === 'omc' || userContext?.role === 'dealer') && (
         <Card>
           <CardContent className="p-4">
@@ -1305,59 +1624,35 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                 </Select>
               </div>
 
-              {(activeTab === 'deliveries' || activeTab === 'daily-stock') && (
-                <>
-                  <Separator orientation="vertical" className="hidden md:block" />
-                  <div>
-                    <Label>Date Range</Label>
-                    <Select value={dateRange} onValueChange={setDateRange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select range" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="today">Today</SelectItem>
-                        <SelectItem value="week">Last 7 Days</SelectItem>
-                        <SelectItem value="month">Last 30 Days</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              )}
+              <Separator orientation="vertical" className="hidden md:block" />
+              <div>
+                <Label>Date Range</Label>
+                <Select value={dateRange} onValueChange={setDateRange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select range" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="today">Today</SelectItem>
+                    <SelectItem value="week">Last 7 Days</SelectItem>
+                    <SelectItem value="month">Last 30 Days</SelectItem>
+                    <SelectItem value="all">All Time</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              {activeTab === 'deliveries' && (
-                <>
-                  <Separator orientation="vertical" className="hidden md:block" />
-                  <div>
-                    <Label>Status</Label>
-                    <Select value={statusFilter} onValueChange={setStatusFilter}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="All Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Status</SelectItem>
-                        <SelectItem value="scheduled">Scheduled</SelectItem>
-                        <SelectItem value="in_transit">In Transit</SelectItem>
-                        <SelectItem value="delivered">Delivered</SelectItem>
-                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <Separator orientation="vertical" className="hidden md:block" />
-                  <div className="flex-1">
-                    <Label>Search Deliveries</Label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
-                      <Input
-                        placeholder="Search driver, supplier, vehicle..."
-                        className="pl-10"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
+              <Separator orientation="vertical" className="hidden md:block" />
+              <div className="flex-1">
+                <Label>Search Records</Label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
+                  <Input
+                    placeholder="Search products, stations, notes..."
+                    className="pl-10"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+              </div>
 
               <Separator orientation="vertical" className="hidden md:block" />
               <div className="flex items-end">
@@ -1365,7 +1660,6 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   variant="outline"
                   onClick={() => {
                     setSelectedStation(stationId || 'all');
-                    setStatusFilter('all');
                     setSearchTerm('');
                     setDateRange('today');
                   }}
@@ -1380,7 +1674,7 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
         </Card>
       )}
 
-      {/* Main Content Area */}
+      {/* Main Content */}
       <div className="space-y-6">
         {activeTab === 'overview' && (
           <>
@@ -1393,9 +1687,14 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-600">Total Stock</p>
-                        <p className="text-2xl font-bold">{totalStock.toLocaleString()} L</p>
-                        <p className="text-sm text-green-600">Across all products</p>
+                        <p className="text-sm font-medium text-gray-600">Total Current Stock</p>
+                        <p className="text-2xl font-bold">{safeFormatNumber(totalStock)} L</p>
+                        <p className="text-sm text-green-600">
+                          {selectedStation === 'all' 
+                            ? `Across ${getManageableStations().length} stations` 
+                            : `At ${availableStations.find(s => s.id === selectedStation)?.name}`
+                          }
+                        </p>
                       </div>
                       <div className="p-2 bg-blue-100 rounded-lg">
                         <BarChart3 className="w-6 h-6 text-blue-600" />
@@ -1408,14 +1707,12 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-600">Low Stock Alerts</p>
-                        <p className="text-2xl font-bold">{lowStockCount}</p>
-                        <p className={`text-sm ${lowStockCount > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                          {lowStockCount > 0 ? 'Requires attention' : 'All good'}
-                        </p>
+                        <p className="text-sm font-medium text-gray-600">Today's Records</p>
+                        <p className="text-2xl font-bold">{todayStocksCount}</p>
+                        <p className="text-sm text-blue-600">Products recorded</p>
                       </div>
-                      <div className="p-2 bg-orange-100 rounded-lg">
-                        <AlertTriangle className="w-6 h-6 text-orange-600" />
+                      <div className="p-2 bg-blue-100 rounded-lg">
+                        <ClipboardList className="w-6 h-6 text-blue-600" />
                       </div>
                     </div>
                   </CardContent>
@@ -1425,12 +1722,12 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-600">Avg Capacity</p>
-                        <p className="text-2xl font-bold">{averageCapacity.toFixed(1)}%</p>
-                        <p className="text-sm text-green-600">Healthy</p>
+                        <p className="text-sm font-medium text-gray-600">Perfect Matches</p>
+                        <p className="text-2xl font-bold">{perfectMatches}</p>
+                        <p className="text-sm text-green-600">Zero variance</p>
                       </div>
                       <div className="p-2 bg-green-100 rounded-lg">
-                        <TrendingUp className="w-6 h-6 text-green-600" />
+                        <CheckCircle className="w-6 h-6 text-green-600" />
                       </div>
                     </div>
                   </CardContent>
@@ -1440,12 +1737,12 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-600">Active Products</p>
-                        <p className="text-2xl font-bold">{tankStocks.length}</p>
-                        <p className="text-sm text-blue-600">Being monitored</p>
+                        <p className="text-sm font-medium text-gray-600">With Variance</p>
+                        <p className="text-2xl font-bold">{withVariance}</p>
+                        <p className="text-sm text-orange-600">Needs review</p>
                       </div>
-                      <div className="p-2 bg-purple-100 rounded-lg">
-                        <Package className="w-6 h-6 text-purple-600" />
+                      <div className="p-2 bg-orange-100 rounded-lg">
+                        <AlertCircle className="w-6 h-6 text-orange-600" />
                       </div>
                     </div>
                   </CardContent>
@@ -1455,93 +1752,94 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
 
             <Separator />
 
-            {/* Detailed Stock Cards */}
-            {loading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <Card key={i}>
-                    <CardContent className="p-6">
-                      <div className="space-y-4">
-                        <Skeleton className="h-4 w-1/2" />
-                        <Skeleton className="h-8 w-3/4" />
-                        <Skeleton className="h-2 w-full" />
-                        <Skeleton className="h-3 w-2/3" />
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {tankStocks.map((stock) => {
-                  const capacityPercentage = (stock.current_volume / stock.max_capacity) * 100;
-                  return (
-                    <Card key={stock.id} className="hover:shadow-lg transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                          <div>
-                            <p className="text-sm font-medium text-gray-600">{stock.product_name}</p>
-                            <p className="text-2xl font-bold">
-                              {stock.current_volume.toLocaleString()} {stock.product_unit}
-                            </p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <Badge variant="outline" className={getStockStatusColor(stock.status)}>
-                                {getStockStatusIcon(stock.status)}
-                                <span className="ml-1 capitalize">{stock.status}</span>
-                              </Badge>
-                              <span className="text-sm text-gray-500">
-                                Capacity: {capacityPercentage.toFixed(1)}%
-                              </span>
+            {/* Current Stock Overview */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="w-5 h-5" />
+                  Current Stock Overview
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <TableSkeleton />
+                ) : filteredCurrentStock.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {filteredCurrentStock
+                      .slice(0, 6)
+                      .map((stock) => (
+                        <Card key={`${stock.station_id}-${stock.product_id}`} className="hover:shadow-lg transition-shadow">
+                          <CardContent className="p-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <div>
+                                <p className="text-sm font-medium text-gray-600">{safeGet(stock.products?.name, 'Product')}</p>
+                                <p className="text-2xl font-bold">
+                                  {safeFormatNumber(stock.closing_stock)} {safeGet(stock.products?.unit, 'L')}
+                                </p>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <Badge variant="outline" className={getVarianceColor(safeGet(stock.variance, 0))}>
+                                    Variance: {safeGet(stock.variance, 0) >= 0 ? '+' : ''}{safeGet(stock.variance, 0).toFixed(2)}
+                                  </Badge>
+                                  <span className="text-sm text-gray-500">
+                                    {safeGet(stock.stations?.name, 'Station')}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className={`p-3 rounded-lg ${
+                                safeGet(stock.variance, 0) === 0 ? 'bg-green-100' :
+                                Math.abs(safeGet(stock.variance, 0)) <= 100 ? 'bg-yellow-100' : 'bg-red-100'
+                              }`}>
+                                <Database className={`w-6 h-6 ${
+                                  safeGet(stock.variance, 0) === 0 ? 'text-green-600' :
+                                  Math.abs(safeGet(stock.variance, 0)) <= 100 ? 'text-yellow-600' : 'text-red-600'
+                                }`} />
+                              </div>
                             </div>
-                          </div>
-                          <div className={`p-3 rounded-lg ${
-                            stock.status === 'adequate' ? 'bg-green-100' :
-                            stock.status === 'low' ? 'bg-yellow-100' :
-                            stock.status === 'critical' ? 'bg-orange-100' : 'bg-red-100'
-                          }`}>
-                            {getStockStatusIcon(stock.status)}
-                          </div>
-                        </div>
-                        
-                        {/* Progress Bar */}
-                        <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                          <div 
-                            className={`h-2 rounded-full transition-all duration-500 ${
-                              stock.status === 'adequate' ? 'bg-green-500' :
-                              stock.status === 'low' ? 'bg-yellow-500' :
-                              stock.status === 'critical' ? 'bg-orange-500' : 'bg-red-500'
-                            }`}
-                            style={{ width: `${capacityPercentage}%` }}
-                          ></div>
-                        </div>
-                        
-                        <div className="flex justify-between text-xs text-gray-500 mb-2">
-                          <span>0 {stock.product_unit}</span>
-                          <span>{stock.max_capacity.toLocaleString()} {stock.product_unit}</span>
-                        </div>
-                        
-                        {stock.last_delivery_date && (
-                          <p className="text-xs text-gray-500 mt-2">
-                            Last delivery: {new Date(stock.last_delivery_date).toLocaleDateString()} 
-                            ({stock.last_delivery_quantity.toLocaleString()} {stock.product_unit})
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
-
-            {tankStocks.length === 0 && !loading && (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <Package className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold text-gray-600 mb-2">No Stock Data</h3>
-                  <p className="text-gray-500">No tank stock data available for the selected station.</p>
-                </CardContent>
-              </Card>
-            )}
+                            
+                            <div className="space-y-2 text-sm text-gray-600">
+                              <div className="flex justify-between">
+                                <span>Opening:</span>
+                                <span>{safeFormatNumber(stock.opening_stock)} {safeGet(stock.products?.unit, 'L')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Received:</span>
+                                <span>{safeFormatNumber(stock.received)} {safeGet(stock.products?.unit, 'L')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Sales:</span>
+                                <span>{safeFormatNumber(stock.sales)} {safeGet(stock.products?.unit, 'L')}</span>
+                              </div>
+                              <div className="flex justify-between font-medium">
+                                <span>Closing:</span>
+                                <span className="text-blue-600">{safeFormatNumber(stock.closing_stock)} {safeGet(stock.products?.unit, 'L')}</span>
+                              </div>
+                            </div>
+                            
+                            <p className="text-xs text-gray-500 mt-2">
+                              Last updated: {new Date(safeGet(stock.stock_date, new Date().toISOString())).toLocaleDateString()}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <Package className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-600 mb-2">No Stock Data</h3>
+                    <p className="text-gray-500">No daily tank stock data available for the selected filters.</p>
+                    {canCreateRecords() && (
+                      <Button 
+                        onClick={() => setShowDailyStockDialog(true)} 
+                        className="mt-4 bg-green-600 hover:bg-green-700"
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Record First Stock
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </>
         )}
 
@@ -1552,102 +1850,80 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
               <Card><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-gray-600">Today's Records</p><p className="text-2xl font-bold">{todayStocksCount}</p><p className="text-sm text-blue-600">Products recorded</p></div><div className="p-2 bg-blue-100 rounded-lg"><ClipboardList className="w-6 h-6 text-blue-600" /></div></div></CardContent></Card>
               <Card><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-gray-600">Perfect Matches</p><p className="text-2xl font-bold">{perfectMatches}</p><p className="text-sm text-green-600">Zero variance</p></div><div className="p-2 bg-green-100 rounded-lg"><CheckCircle className="w-6 h-6 text-green-600" /></div></div></CardContent></Card>
               <Card><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-gray-600">With Variance</p><p className="text-2xl font-bold">{withVariance}</p><p className="text-sm text-orange-600">Needs review</p></div><div className="p-2 bg-orange-100 rounded-lg"><AlertCircle className="w-6 h-6 text-orange-600" /></div></div></CardContent></Card>
-              <Card><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-gray-600">Total Variance</p><p className={`text-2xl font-bold ${totalVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{totalVariance >= 0 ? '+' : ''}{totalVariance.toFixed(2)}L</p><p className="text-sm text-gray-600">Net difference</p></div><div className="p-2 bg-purple-100 rounded-lg"><Calculator className="w-6 h-6 text-purple-600" /></div></div></CardContent></Card>
+              <Card><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm font-medium text-gray-600">Total Variance</p><p className={`text-2xl font-bold ${totalVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>{totalVariance >= 0 ? '+' : ''}{safeFormatNumber(totalVariance)}L</p><p className="text-sm text-gray-600">Net difference</p></div><div className="p-2 bg-purple-100 rounded-lg"><Calculator className="w-6 h-6 text-purple-600" /></div></div></CardContent></Card>
             </div>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="flex items-center gap-2"><ClipboardList className="w-5 h-5" />Daily Stock Records</CardTitle>
-                <Badge variant="outline" className="bg-gray-100">{filteredDailyStocks.length} Total</Badge>
+                <Badge variant="outline" className="bg-gray-100">{filteredDailyStocksCount} Total</Badge>
               </CardHeader>
               <CardContent>
                 {loading ? <TableSkeleton /> : filteredDailyStocks.length > 0 ? (
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Product</TableHead><TableHead>Opening Stock</TableHead><TableHead>Deliveries</TableHead><TableHead>Sales</TableHead><TableHead>Closing Stock</TableHead><TableHead>Variance</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {filteredDailyStocks.map((stock: any) => (
-                        <TableRow key={stock.id}>
-                          <TableCell><div className="flex items-center gap-1"><Calendar className="w-3 h-3 text-gray-500" />{new Date(stock.stock_date).toLocaleDateString()}</div></TableCell>
-                          <TableCell className="font-medium">{stock.product_name}</TableCell>
-                          <TableCell>{stock.opening_stock.toLocaleString()} L</TableCell>
-                          <TableCell>{stock.deliveries.toLocaleString()} L</TableCell>
-                          <TableCell>{stock.sales.toLocaleString()} L</TableCell>
-                          <TableCell>{stock.closing_stock.toLocaleString()} L</TableCell>
-                          <TableCell><Badge className={getVarianceColor(stock.variance)}>{stock.variance >= 0 ? '+' : ''}{stock.variance.toFixed(2)} L</Badge></TableCell>
-                          <TableCell><Badge className={stock.variance === 0 ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}>{stock.variance === 0 ? 'Perfect' : 'Variance'}</Badge></TableCell>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Station</TableHead>
+                          <TableHead>Product</TableHead>
+                          <TableHead>Opening Stock</TableHead>
+                          <TableHead>Received</TableHead>
+                          <TableHead>Sales</TableHead>
+                          <TableHead>Closing Stock</TableHead>
+                          <TableHead>Variance</TableHead>
+                          <TableHead>Status</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredDailyStocks.map((stock) => (
+                          <TableRow key={stock.id}>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="w-3 h-3 text-gray-500" />
+                                {new Date(safeGet(stock.stock_date, new Date().toISOString())).toLocaleDateString()}
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-medium">{safeGet(stock.stations?.name, 'Station')}</TableCell>
+                            <TableCell>{safeGet(stock.products?.name, 'Product')}</TableCell>
+                            <TableCell>{safeFormatNumber(stock.opening_stock)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                            <TableCell>{safeFormatNumber(stock.received)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                            <TableCell>{safeFormatNumber(stock.sales)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                            <TableCell>{safeFormatNumber(stock.closing_stock)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                            <TableCell>
+                              <Badge className={getVarianceColor(safeGet(stock.variance, 0))}>
+                                {safeGet(stock.variance, 0) >= 0 ? '+' : ''}{safeFormatNumber(stock.variance)} {safeGet(stock.products?.unit, 'L')}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={safeGet(stock.variance, 0) === 0 ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}>
+                                {safeGet(stock.variance, 0) === 0 ? 'Perfect' : 'Variance'}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 ) : (
                   <div className="text-center py-8">
                     <ClipboardList className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                     <p className="text-gray-500">No daily stock records found</p>
                     <p className="text-sm text-gray-400">Record your first daily stock to get started</p>
-                    {canCreateRecords() && (<Button onClick={() => setShowDailyStockDialog(true)} className="mt-4 bg-green-600 hover:bg-green-700"><Plus className="w-4 h-4 mr-2" />Record Daily Stock</Button>)}
+                    {canCreateRecords() && (
+                      <Button 
+                        onClick={() => setShowDailyStockDialog(true)} 
+                        className="mt-4 bg-green-600 hover:bg-green-700"
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Record Daily Stock
+                      </Button>
+                    )}
                   </div>
                 )}
               </CardContent>
             </Card>
           </>
-        )}
-
-        {/* Deliveries Tab */}
-        {activeTab === 'deliveries' && (
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="flex items-center gap-2"><Truck className="w-5 h-5" />Delivery Management</CardTitle>
-              <Badge variant="outline" className="bg-gray-100">{filteredDeliveries.length} Total</Badge>
-            </CardHeader>
-            <CardContent>
-              {loading ? <TableSkeleton /> : filteredDeliveries.length > 0 ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead><TableHead>Product</TableHead><TableHead>Quantity</TableHead><TableHead>Supplier</TableHead>
-                      <TableHead>Driver</TableHead><TableHead>Vehicle</TableHead><TableHead>Received By</TableHead><TableHead>Status</TableHead>
-                      {canUpdateRecords() && <TableHead>Actions</TableHead>}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredDeliveries.map((delivery: any) => (
-                      <TableRow key={delivery.id}>
-                        <TableCell><div className="flex items-center gap-1"><Calendar className="w-3 h-3 text-gray-500" />{new Date(delivery.delivery_date).toLocaleDateString()}</div></TableCell>
-                        <TableCell className="font-medium">{delivery.product_name}</TableCell>
-                        <TableCell>{delivery.quantity.toLocaleString()} L</TableCell>
-                        <TableCell>{delivery.supplier}</TableCell>
-                        <TableCell><div className="flex items-center gap-1"><User className="w-3 h-3 text-gray-500" />{delivery.driver_name}</div></TableCell>
-                        <TableCell>{delivery.vehicle_number || 'N/A'}</TableCell>
-                        <TableCell>{delivery.received_by}</TableCell>
-                        <TableCell><Badge className={getDeliveryStatusColor(delivery.status)}>{delivery.status.replace('_', ' ')}</Badge></TableCell>
-                        {canUpdateRecords() && (
-                          <TableCell>
-                            <div className="flex gap-2">
-                              {delivery.status !== 'delivered' && delivery.status !== 'cancelled' && (
-                                <Button size="sm" variant="outline" onClick={() => updateDeliveryStatus(delivery.id, 'delivered')} className="flex items-center gap-1">
-                                  <CheckCircle className="w-4 h-4" />Mark Delivered
-                                </Button>
-                              )}
-                              {delivery.status !== 'cancelled' && (
-                                <Button size="sm" variant="outline" onClick={() => updateDeliveryStatus(delivery.id, 'cancelled')}>Cancel</Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <div className="text-center py-8">
-                  <Truck className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                  <p className="text-gray-500">No deliveries found</p>
-                  <p className="text-sm text-gray-400">Record your first delivery to get started</p>
-                  {canCreateRecords() && (<Button onClick={() => setShowDeliveryDialog(true)} className="mt-4 bg-blue-600 hover:bg-blue-700"><Plus className="w-4 h-4 mr-2" />Record Delivery</Button>)}
-                </div>
-              )}
-            </CardContent>
-          </Card>
         )}
 
         {/* Reconciliation Tab */}
@@ -1657,53 +1933,91 @@ export default function InventoryManagement({ stationId, compact = false }: Inve
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle className="flex items-center gap-2"><Calculator className="w-5 h-5" />Daily Stock Reconciliation</CardTitle>
-                  <Button variant="outline" onClick={() => setShowReconciliationDialog(true)} className="flex items-center gap-2"><Plus className="w-4 h-4" />New Reconciliation</Button>
+                  <Button variant="outline" onClick={handleReconciliationButton} className="flex items-center gap-2">
+                    <Plus className="w-4 h-4" />
+                    New Reconciliation
+                  </Button>
                 </CardHeader>
                 <CardContent>
-                  {loading ? <TableSkeleton /> : reconciliations.length > 0 ? (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead><TableHead>Product</TableHead><TableHead>Opening Stock</TableHead><TableHead>Deliveries</TableHead>
-                          <TableHead>Sales</TableHead><TableHead>Closing Stock</TableHead><TableHead>Variance</TableHead><TableHead>Reconciled By</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {reconciliations.slice(0, 10).map((recon: any) => (
-                          <TableRow key={recon.id}>
-                            <TableCell>{new Date(recon.reconciliation_date).toLocaleDateString()}</TableCell>
-                            <TableCell>{recon.product_name}</TableCell>
-                            <TableCell>{recon.opening_stock.toLocaleString()} L</TableCell>
-                            <TableCell>{recon.deliveries.toLocaleString()} L</TableCell>
-                            <TableCell>{recon.sales.toLocaleString()} L</TableCell>
-                            <TableCell>{recon.closing_stock.toLocaleString()} L</TableCell>
-                            <TableCell className={recon.variance >= 0 ? 'text-green-600' : 'text-red-600'}>{recon.variance >= 0 ? '+' : ''}{recon.variance.toLocaleString()} L</TableCell>
-                            <TableCell>{recon.reconciled_by}</TableCell>
+                  {loading ? <TableSkeleton /> : filteredDailyStocks.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Station</TableHead>
+                            <TableHead>Product</TableHead>
+                            <TableHead>Opening Stock</TableHead>
+                            <TableHead>Received</TableHead>
+                            <TableHead>Sales</TableHead>
+                            <TableHead>Closing Stock</TableHead>
+                            <TableHead>Variance</TableHead>
+                            <TableHead>Recorded By</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredDailyStocks.slice(0, 10).map((stock) => (
+                            <TableRow key={stock.id}>
+                              <TableCell>{new Date(safeGet(stock.stock_date, new Date().toISOString())).toLocaleDateString()}</TableCell>
+                              <TableCell>{safeGet(stock.stations?.name, 'Station')}</TableCell>
+                              <TableCell>{safeGet(stock.products?.name, 'Product')}</TableCell>
+                              <TableCell>{safeFormatNumber(stock.opening_stock)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                              <TableCell>{safeFormatNumber(stock.received)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                              <TableCell>{safeFormatNumber(stock.sales)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                              <TableCell>{safeFormatNumber(stock.closing_stock)} {safeGet(stock.products?.unit, 'L')}</TableCell>
+                              <TableCell className={safeGet(stock.variance, 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                {safeGet(stock.variance, 0) >= 0 ? '+' : ''}{safeFormatNumber(stock.variance)} {safeGet(stock.products?.unit, 'L')}
+                              </TableCell>
+                              <TableCell>{safeGet(stock.recorded_by, '')}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   ) : (
                     <div className="text-center py-8">
                       <AlertTriangle className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                       <p className="text-gray-500">No reconciliations recorded</p>
                       <p className="text-sm text-gray-400">Start by recording your first stock reconciliation</p>
-                      <Button onClick={() => setShowReconciliationDialog(true)} className="mt-4 bg-blue-600 hover:bg-blue-700"><Plus className="w-4 h-4 mr-2" />New Reconciliation</Button>
+                      <Button onClick={handleReconciliationButton} className="mt-4 bg-blue-600 hover:bg-blue-700">
+                        <Plus className="w-4 h-4 mr-2" />
+                        New Reconciliation
+                      </Button>
                     </div>
                   )}
                 </CardContent>
               </Card>
             )}
 
-            {reconciliations.length > 0 && (
+            {filteredDailyStocks.length > 0 && (
               <Card>
-                <CardHeader><CardTitle>Reconciliation Summary</CardTitle></CardHeader>
+                <CardHeader>
+                  <CardTitle>Reconciliation Summary</CardTitle>
+                </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="text-center p-4 bg-blue-50 rounded-lg"><p className="text-2xl font-bold text-blue-600">{reconciliations.length}</p><p className="text-sm text-blue-600">Total Reconciliations</p></div>
-                    <div className="text-center p-4 bg-green-50 rounded-lg"><p className="text-2xl font-bold text-green-600">{reconciliations.filter((r: any) => r.variance === 0).length}</p><p className="text-sm text-green-600">Perfect Matches</p></div>
-                    <div className="text-center p-4 bg-orange-50 rounded-lg"><p className="text-2xl font-bold text-orange-600">{reconciliations.filter((r: any) => Math.abs(r.variance) > 0 && Math.abs(r.variance) <= 100).length}</p><p className="text-sm text-orange-600">Minor Variances</p></div>
-                    <div className="text-center p-4 bg-red-50 rounded-lg"><p className="text-2xl font-bold text-red-600">{reconciliations.filter((r: any) => Math.abs(r.variance) > 100).length}</p><p className="text-sm text-red-600">Major Variances</p></div>
+                    <div className="text-center p-4 bg-blue-50 rounded-lg">
+                      <p className="text-2xl font-bold text-blue-600">{filteredDailyStocks.length}</p>
+                      <p className="text-sm text-blue-600">Total Records</p>
+                    </div>
+                    <div className="text-center p-4 bg-green-50 rounded-lg">
+                      <p className="text-2xl font-bold text-green-600">
+                        {filteredDailyStocks.filter((r) => safeGet(r.variance, 0) === 0).length}
+                      </p>
+                      <p className="text-sm text-green-600">Perfect Matches</p>
+                    </div>
+                    <div className="text-center p-4 bg-orange-50 rounded-lg">
+                      <p className="text-2xl font-bold text-orange-600">
+                        {filteredDailyStocks.filter((r) => Math.abs(safeGet(r.variance, 0)) > 0 && Math.abs(safeGet(r.variance, 0)) <= 100).length}
+                      </p>
+                      <p className="text-sm text-orange-600">Minor Variances</p>
+                    </div>
+                    <div className="text-center p-4 bg-red-50 rounded-lg">
+                      <p className="text-2xl font-bold text-red-600">
+                        {filteredDailyStocks.filter((r) => Math.abs(safeGet(r.variance, 0)) > 100).length}
+                      </p>
+                      <p className="text-sm text-red-600">Major Variances</p>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
