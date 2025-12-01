@@ -1,5 +1,5 @@
 {
-  "name": "pumpguard",
+  "name": "app-pumpguard",
   "version": 2,
   "builds": [
     {
@@ -10,56 +10,15 @@
       }
     }
   ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1",
-      "headers": {
-        "Cache-Control": "public, max-age=0, must-revalidate"
-      }
-    },
-    {
-      "src": "/assets/(.*)",
-      "headers": {
-        "Cache-Control": "public, max-age=31536000, immutable"
-      }
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/frontend/index.html"
-    }
-  ],
-  "headers": [
+  "rewrites": [
     {
       "source": "/(.*)",
-      "headers": [
-        {
-          "key": "X-Content-Type-Options",
-          "value": "nosniff"
-        },
-        {
-          "key": "X-Frame-Options",
-          "value": "DENY"
-        },
-        {
-          "key": "X-XSS-Protection",
-          "value": "1; mode=block"
-        },
-        {
-          "key": "Referrer-Policy",
-          "value": "strict-origin-when-cross-origin"
-        },
-        {
-          "key": "Permissions-Policy",
-          "value": "camera=(), microphone=(), geolocation=(), interest-cohort=()"
-        }
-      ]
+      "destination": "/frontend/index.html"
     }
   ],
   "env": {
     "NODE_VERSION": "18"
   },
-  "regions": ["iad1"],
   "installCommand": "cd frontend && npm install",
   "buildCommand": "cd frontend && npm run build:prod",
   "outputDirectory": "frontend/dist"
