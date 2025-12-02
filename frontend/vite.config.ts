@@ -10,6 +10,16 @@ export default defineConfig({
     },
   },
   build: {
-    // Empty - let Vite handle chunking
-  }
+    // Add these options
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: true, // ✅ generate source maps for debugging
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+      },
+    },
+  },
+  // Ensure base path is correct
+  base: './',
 })
