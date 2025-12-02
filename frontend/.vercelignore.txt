@@ -1,0 +1,6 @@
+*.tsbuildinfo
+tsconfig.json
+**/*.test.ts
+**/*.spec.ts
+.eslintrc.*
+.prettierrc.*
