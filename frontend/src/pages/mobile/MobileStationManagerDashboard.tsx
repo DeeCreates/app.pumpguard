@@ -1,3 +1,4 @@
+// pages/mobile/MobileStationManagerDashboard.tsx
 import React, { useState, useEffect, lazy, Suspense, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "../../contexts/AuthContext";
@@ -57,23 +58,17 @@ import {
   Search,
   Filter,
   MoreHorizontal,
-  ChevronLeft,
-  ChevronRight,
-  Home,
   Menu,
   X,
-  LogOut,
+  ChevronRight,
+  ChevronDown,
+  Smartphone,
   Activity,
-  Shield,
-  Bell,
-  FileText,
+  TrendingDown,
   AlertCircle,
-  Thermometer,
-  Droplets,
-  Zap,
-  Battery,
 } from "lucide-react";
 import { offlineSync } from "../../utils/offline-sync";
+import { Sheet, SheetContent, SheetTrigger } from "../../components/ui/sheet";
 
 // Lazy loaded components
 const LazyIoTDashboard = lazy(() => import('../../components/temp/IoTDashboard'));
@@ -81,7 +76,7 @@ const LazyShiftManagement = lazy(() => import('../../pages/operations/ShiftManag
 const LazyPumpCalibration = lazy(() => import('../../pages/operations/PumpCalibration'));
 const LazyBankDeposits = lazy(() => import('../../pages/financial/BankDeposits'));
 
-// Types (keep same as before)
+// Types (same as original)
 interface DailyReport {
   total_sales: number;
   total_expenses: number;
@@ -213,7 +208,7 @@ interface DashboardConfig {
   showNotifications: boolean;
 }
 
-// Utility functions (keep same as before)
+// Utility functions (same as original)
 const debounce = <T extends (...args: any[]) => any>(
   func: T,
   wait: number
@@ -273,7 +268,7 @@ const handleApiError = (error: any, operation: string) => {
   }
 };
 
-// Form validation functions (keep same as before)
+// Form validation functions (same as original)
 const validateSalesForm = (form: any, pumps: Pump[]): string[] => {
   const errors: string[] = [];
   
@@ -344,177 +339,130 @@ const validateInventoryForm = (form: any): string[] => {
 // Mobile-optimized components
 const MobileHeader = ({ 
   station, 
-  isOnline, 
-  pendingSync, 
-  onMenuPress,
-  onSyncPress,
-  onRefreshPress,
-  isLoading
+  user,
+  onMenuClick,
+  onRefresh,
+  isLoading,
+  isOnline,
+  pendingSync
 }: { 
   station: Station | null;
+  user: any;
+  onMenuClick: () => void;
+  onRefresh: () => void;
+  isLoading: boolean;
   isOnline: boolean;
   pendingSync: number;
-  onMenuPress: () => void;
-  onSyncPress: () => void;
-  onRefreshPress: () => void;
-  isLoading: boolean;
 }) => (
-  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-3">
+  <div className="sticky top-0 z-50 bg-white border-b px-4 py-3">
     <div className="flex items-center justify-between">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onMenuPress}
-        className="rounded-full"
-      >
-        <Menu className="w-5 h-5" />
-      </Button>
-      <div className="flex-1 text-center px-2">
-        <h1 className="text-base font-semibold text-gray-900 truncate">
-          {station?.name || 'Station'}
-        </h1>
-        <div className="flex items-center justify-center gap-2 mt-1">
-          <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${isOnline ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-            {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            <span>{isOnline ? 'Online' : 'Offline'}</span>
-          </div>
-          {pendingSync > 0 && (
-            <div className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-              {pendingSync} pending
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
-          onClick={onRefreshPress}
-          disabled={isLoading}
-          className="rounded-full"
+          onClick={onMenuClick}
+          className="h-10 w-10"
         >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          <Menu className="h-5 w-5" />
         </Button>
-        {pendingSync > 0 && isOnline && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSyncPress}
-            className="rounded-full"
-          >
-            <Upload className="w-4 h-4" />
-          </Button>
-        )}
+        <div>
+          <h1 className="text-lg font-bold text-gray-900">
+            {station?.name || 'Station'}
+          </h1>
+          <p className="text-xs text-gray-600">Manager: {user?.name || 'User'}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className={`px-2 py-1 rounded-lg flex items-center gap-1 text-xs ${isOnline ? 'bg-green-100' : 'bg-orange-100'}`}>
+          {isOnline ? (
+            <>
+              <Wifi className="h-3 w-3 text-green-600" />
+              <span className="text-green-700">Online</span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="h-3 w-3 text-orange-600" />
+              <span className="text-orange-700">Offline</span>
+            </>
+          )}
+          {pendingSync > 0 && (
+            <span className="ml-1 px-1 bg-white rounded text-xs">
+              {pendingSync}
+            </span>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="h-10 w-10"
+        >
+          <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+        </Button>
       </div>
     </div>
   </div>
 );
 
-const MobileTabNavigation = ({ activeTab, setActiveTab }: { 
-  activeTab: string; 
-  setActiveTab: (tab: string) => void;
-}) => {
-  const tabs = [
-    { id: 'operations', label: 'Ops', icon: BarChart3 },
-    { id: 'financial', label: 'Finance', icon: DollarSign },
-    { id: 'inventory', label: 'Stock', icon: Package },
-    { id: 'equipment', label: 'Pumps', icon: Gauge },
-    { id: 'reports', label: 'Reports', icon: Download },
-  ];
-
-  return (
-    <div className="sticky top-[60px] z-40 bg-white border-b border-gray-200">
-      <div className="flex overflow-x-auto px-4 py-2 no-scrollbar">
-        {tabs.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <Button
-              key={tab.id}
-              variant="ghost"
-              size="sm"
-              className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 mx-1 rounded-lg ${
-                activeTab === tab.id
-                  ? 'bg-blue-50 text-blue-700'
-                  : 'text-gray-600'
-              }`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <Icon className="w-4 h-4" />
-              <span className="text-xs font-medium">{tab.label}</span>
-            </Button>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-const MobileStatsCard = ({ 
+const MobileStatsGrid = ({ 
   dailyReport, 
   expenseStats, 
   fuelStockCard, 
   pumps 
 }: { 
-  dailyReport: DailyReport | null;
-  expenseStats: ExpenseStats;
-  fuelStockCard: FuelStockCard[];
-  pumps: Pump[];
+  dailyReport: DailyReport | null; 
+  expenseStats: ExpenseStats; 
+  fuelStockCard: FuelStockCard[]; 
+  pumps: Pump[]; 
 }) => {
   const stats = [
     {
       label: "Today's Sales",
       value: `₵${(dailyReport?.total_sales || 0).toLocaleString()}`,
       icon: DollarSign,
-      color: 'green',
-      subtext: `${dailyReport?.sales?.length || 0} transactions`
+      color: "bg-green-50 text-green-600",
+      description: `${dailyReport?.sales?.length || 0} transactions`
     },
     {
       label: "Expenses",
       value: `₵${expenseStats.total_expenses.toLocaleString()}`,
-      icon: TrendingUp,
-      color: 'red',
-      subtext: `${expenseStats.pending_approval > 0 ? `${expenseStats.pending_approval} pending` : 'All settled'}`
+      icon: TrendingDown,
+      color: "bg-red-50 text-red-600",
+      description: `Pending: ₵${expenseStats.pending_approval.toLocaleString()}`
     },
     {
-      label: "Current Stock",
+      label: "Stock",
       value: `${fuelStockCard.reduce((sum, item) => sum + (item.current_stock || 0), 0).toLocaleString()}L`,
       icon: Database,
-      color: 'blue',
-      subtext: `${fuelStockCard.length} products`
+      color: "bg-blue-50 text-blue-600",
+      description: `${fuelStockCard.length} products`
     },
     {
-      label: "Active Pumps",
-      value: pumps.length.toString(),
+      label: "Pumps",
+      value: `${pumps.length}`,
       icon: Gauge,
-      color: 'purple',
-      subtext: `${pumps.filter(p => p.status === 'active').length} active`
+      color: "bg-purple-50 text-purple-600",
+      description: `${pumps.filter(p => p.status === 'active').length} active`
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 px-4 py-3">
+    <div className="grid grid-cols-2 gap-3 px-4 mb-6">
       {stats.map((stat, index) => {
-        const Icon = stat.icon;
+        const IconComponent = stat.icon;
         return (
-          <div key={index} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
-            <div className="flex items-center justify-between">
+          <div key={index} className="bg-white rounded-xl p-4 shadow-sm border">
+            <div className="flex items-center justify-between mb-2">
               <div>
                 <p className="text-xs text-gray-600 mb-1">{stat.label}</p>
                 <p className="text-lg font-bold text-gray-900">{stat.value}</p>
-                <p className="text-xs text-gray-500 mt-1">{stat.subtext}</p>
               </div>
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                stat.color === 'green' ? 'bg-green-50' :
-                stat.color === 'red' ? 'bg-red-50' :
-                stat.color === 'blue' ? 'bg-blue-50' : 'bg-purple-50'
-              }`}>
-                <Icon className={`w-5 h-5 ${
-                  stat.color === 'green' ? 'text-green-600' :
-                  stat.color === 'red' ? 'text-red-600' :
-                  stat.color === 'blue' ? 'text-blue-600' : 'text-purple-600'
-                }`} />
+              <div className={`p-2 rounded-lg ${stat.color}`}>
+                <IconComponent className="h-4 w-4" />
               </div>
             </div>
+            <p className="text-xs text-gray-600">{stat.description}</p>
           </div>
         );
       })}
@@ -522,49 +470,128 @@ const MobileStatsCard = ({
   );
 };
 
-const MobilePumpPrices = ({ 
-  pumpPrices, 
-  loading, 
-  onRefresh 
-}: { 
-  pumpPrices: PumpPrice[]; 
-  loading: boolean; 
-  onRefresh: () => void;
+const MobileTabNavigation = ({ activeTab, onTabChange }: { 
+  activeTab: string; 
+  onTabChange: (value: string) => void;
 }) => (
-  <div className="px-4 mb-3">
-    <div className="bg-white rounded-xl border border-gray-200 p-3">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-gray-900">Current Prices</h3>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onRefresh}
-          disabled={loading}
-          className="h-7 px-2 text-xs"
-        >
-          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-        </Button>
-      </div>
-      <div className="space-y-2">
+  <div className="sticky top-14 z-40 bg-white border-b px-4 py-2">
+    <Tabs value={activeTab} onValueChange={onTabChange} className="w-full">
+      <TabsList className="w-full grid grid-cols-4 h-10">
+        <TabsTrigger value="operations" className="text-xs">
+          <BarChart3 className="h-3 w-3 mr-1" />
+          Ops
+        </TabsTrigger>
+        <TabsTrigger value="financial" className="text-xs">
+          <DollarSign className="h-3 w-3 mr-1" />
+          Finance
+        </TabsTrigger>
+        <TabsTrigger value="inventory" className="text-xs">
+          <Package className="h-3 w-3 mr-1" />
+          Stock
+        </TabsTrigger>
+        <TabsTrigger value="reports" className="text-xs">
+          <Download className="h-3 w-3 mr-1" />
+          Reports
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  </div>
+);
+
+const MobileQuickActions = ({
+  onSalesClick,
+  onExpenseClick,
+  onInventoryClick,
+  onCheckClick,
+  onTankDippingClick
+}: {
+  onSalesClick: () => void;
+  onExpenseClick: () => void;
+  onInventoryClick: () => void;
+  onCheckClick: () => void;
+  onTankDippingClick: () => void;
+}) => (
+  <div className="px-4 mb-6">
+    <h3 className="text-sm font-semibold text-gray-900 mb-3">Quick Actions</h3>
+    <div className="grid grid-cols-3 gap-2">
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={onSalesClick}
+      >
+        <DollarSign className="h-5 w-5 text-green-600" />
+        <span className="text-xs text-gray-700">Record Sale</span>
+      </Button>
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={onExpenseClick}
+      >
+        <Receipt className="h-5 w-5 text-red-600" />
+        <span className="text-xs text-gray-700">Add Expense</span>
+      </Button>
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={onInventoryClick}
+      >
+        <Package className="h-5 w-5 text-blue-600" />
+        <span className="text-xs text-gray-700">Inventory</span>
+      </Button>
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={onCheckClick}
+      >
+        <Building2 className="h-5 w-5 text-orange-600" />
+        <span className="text-xs text-gray-700">Station Check</span>
+      </Button>
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={onTankDippingClick}
+      >
+        <Fuel className="h-5 w-5 text-purple-600" />
+        <span className="text-xs text-gray-700">Tank Dip</span>
+      </Button>
+      <Button
+        variant="outline"
+        className="h-20 flex-col gap-2 bg-white border-gray-300"
+        onClick={() => {}}
+      >
+        <Settings className="h-5 w-5 text-gray-600" />
+        <span className="text-xs text-gray-700">More</span>
+      </Button>
+    </div>
+  </div>
+);
+
+const MobilePumpPrices = ({ prices, loading }: { prices: PumpPrice[]; loading: boolean }) => (
+  <div className="px-4 mb-6">
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="text-sm font-semibold text-gray-900">Current Prices</h3>
+    </div>
+    <div className="bg-white rounded-xl p-4 border">
+      <div className="grid grid-cols-2 gap-3">
         {loading ? (
           Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="flex items-center justify-between py-2">
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-4 w-12" />
+            <div key={i} className="flex items-center justify-between p-2">
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-5 w-12" />
             </div>
           ))
-        ) : pumpPrices.length > 0 ? (
-          pumpPrices.slice(0, 2).map((price) => (
-            <div key={price.product_id} className="flex items-center justify-between py-1">
-              <span className="text-sm text-gray-700">{price.product_type}</span>
-              <span className="text-sm font-semibold text-green-600">
+        ) : prices.length > 0 ? (
+          prices.slice(0, 2).map((price) => (
+            <div key={price.product_id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+              <span className="text-sm font-medium text-gray-900">{price.product_type}</span>
+              <span className="text-sm font-bold text-green-600">
                 ₵{price.price_per_liter.toFixed(2)}
               </span>
             </div>
           ))
         ) : (
-          <div className="text-center py-2">
-            <p className="text-sm text-gray-500">No prices set</p>
+          <div className="col-span-2 text-center py-2 text-gray-500">
+            <p className="text-sm">No prices set</p>
           </div>
         )}
       </div>
@@ -572,564 +599,252 @@ const MobilePumpPrices = ({
   </div>
 );
 
-const MobileSalesCard = ({ 
-  dailyReport, 
-  onRecordSale,
-  onDebugPumps
-}: { 
-  dailyReport: DailyReport | null; 
-  onRecordSale: () => void;
-  onDebugPumps: () => void;
-}) => (
-  <div className="px-4 mb-4">
-    <div className="bg-white rounded-xl border border-gray-200">
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-900">Sales Today</h3>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onDebugPumps}
-              className="h-7 px-2 text-xs"
-            >
-              <AlertTriangle className="w-3 h-3" />
-            </Button>
-            <Button
-              size="sm"
-              onClick={onRecordSale}
-              className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700"
-            >
-              <Plus className="w-3 h-3 mr-1" />
-              Record
-            </Button>
-          </div>
-        </div>
-      </div>
-      <div className="p-4">
-        <div className="space-y-3">
-          {dailyReport?.sales?.slice(0, 3).map((sale: any) => (
-            <div key={sale.id} className="flex items-center justify-between py-2">
-              <div>
-                <p className="text-sm font-medium text-gray-900">
-                  {sale.products?.name || 'Unknown'}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {(sale.closing_meter - sale.opening_meter).toFixed(1)}L •{' '}
-                  {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-              <p className="text-sm font-semibold text-gray-900">
-                ₵{sale.total_amount?.toFixed(2) || '0.00'}
+const MobileSalesList = ({ sales }: { sales: any[] }) => (
+  <div className="px-4 mb-6">
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="text-sm font-semibold text-gray-900">Recent Sales</h3>
+      <Button variant="ghost" size="sm" className="text-xs">
+        View All
+      </Button>
+    </div>
+    <div className="space-y-2">
+      {sales.slice(0, 3).map((sale) => (
+        <div key={sale.id} className="bg-white rounded-lg p-3 border">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-sm font-medium text-gray-900">{sale.products?.name || 'Unknown'}</p>
+              <p className="text-xs text-gray-600">
+                {sale.closing_meter - sale.opening_meter}L • {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>
-          ))}
-          {(!dailyReport?.sales || dailyReport.sales.length === 0) && (
-            <div className="text-center py-4">
-              <p className="text-sm text-gray-500">No sales today</p>
-            </div>
-          )}
+            <p className="text-sm font-semibold text-gray-900">₵{sale.total_amount?.toLocaleString() || '0'}</p>
+          </div>
         </div>
-      </div>
+      ))}
+      {sales.length === 0 && (
+        <div className="text-center py-4 text-gray-500">
+          <p className="text-sm">No sales today</p>
+        </div>
+      )}
     </div>
   </div>
 );
 
-const MobileExpensesCard = ({ 
-  expenses, 
-  searchTerm,
-  filterStatus,
-  onSearchChange,
-  onFilterChange,
-  onAddExpense,
-  onUpdateStatus,
-  onDelete
-}: { 
-  expenses: Expense[];
-  searchTerm: string;
-  filterStatus: string;
-  onSearchChange: (value: string) => void;
-  onFilterChange: (value: string) => void;
-  onAddExpense: () => void;
-  onUpdateStatus: (id: string, status: 'approved' | 'rejected') => void;
+const MobileExpensesList = ({ expenses, onApprove, onReject, onDelete }: { 
+  expenses: Expense[]; 
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
   onDelete: (id: string) => void;
-}) => {
-  const filteredExpenses = useMemo(() => {
-    let filtered = expenses;
-    
-    if (searchTerm) {
-      filtered = filtered.filter(expense =>
-        expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        expense.category.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-    
-    if (filterStatus !== 'all') {
-      filtered = filtered.filter(expense => expense.status === filterStatus);
-    }
-    
-    return filtered;
-  }, [expenses, searchTerm, filterStatus]);
+}) => (
+  <div className="px-4 mb-6">
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="text-sm font-semibold text-gray-900">Recent Expenses</h3>
+      <Button variant="ghost" size="sm" className="text-xs">
+        View All
+      </Button>
+    </div>
+    <div className="space-y-2">
+      {expenses.slice(0, 3).map((expense) => (
+        <div key={expense.id} className="bg-white rounded-lg p-3 border">
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex-1">
+              <p className="text-sm font-medium text-gray-900 capitalize">{expense.category}</p>
+              <p className="text-xs text-gray-600 truncate">{expense.description}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-semibold text-gray-900">₵{expense.amount}</p>
+              <span className={`text-xs px-2 py-1 rounded-full ${
+                expense.status === 'approved' ? 'bg-green-100 text-green-700' :
+                expense.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-red-100 text-red-700'
+              }`}>
+                {expense.status}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
+            {expense.status === 'pending' && (
+              <div className="flex gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0 text-green-600"
+                  onClick={() => onApprove(expense.id)}
+                >
+                  <CheckCircle className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0 text-red-600"
+                  onClick={() => onReject(expense.id)}
+                >
+                  <XCircle className="h-3 w-3" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0 text-red-600"
+                  onClick={() => onDelete(expense.id)}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+      {expenses.length === 0 && (
+        <div className="text-center py-4 text-gray-500">
+          <p className="text-sm">No expenses</p>
+        </div>
+      )}
+    </div>
+  </div>
+);
 
-  return (
-    <div className="px-4 mb-4">
-      <div className="bg-white rounded-xl border border-gray-200">
-        <div className="p-4 border-b border-gray-200">
+const MobileFuelStock = ({ stock }: { stock: FuelStockCard[] }) => (
+  <div className="px-4 mb-6">
+    <h3 className="text-sm font-semibold text-gray-900 mb-3">Current Stock</h3>
+    <div className="space-y-2">
+      {stock.map((item) => (
+        <div key={item.product_id} className="bg-white rounded-lg p-3 border">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
+              <p className="text-xs text-gray-600">
+                Last updated: {new Date(item.last_updated).toLocaleDateString()}
+              </p>
+            </div>
+            <p className="text-lg font-bold text-blue-600">
+              {item.current_stock?.toLocaleString()}{item.unit}
+            </p>
+          </div>
+        </div>
+      ))}
+      {stock.length === 0 && (
+        <div className="text-center py-4 text-gray-500">
+          <p className="text-sm">No stock data</p>
+        </div>
+      )}
+    </div>
+  </div>
+);
+
+const MobileNavigationMenu = ({
+  onClose,
+  onTabChange,
+  onSync,
+  onSettings,
+  pendingSync,
+  isOnline
+}: {
+  onClose: () => void;
+  onTabChange: (tab: string) => void;
+  onSync: () => void;
+  onSettings: () => void;
+  pendingSync: number;
+  isOnline: boolean;
+}) => (
+  <div className="p-4">
+    <div className="flex items-center justify-between mb-6">
+      <div>
+        <h2 className="text-lg font-bold text-gray-900">Menu</h2>
+        <p className="text-sm text-gray-600">Station Manager</p>
+      </div>
+      <Button variant="ghost" size="icon" onClick={onClose}>
+        <X className="h-5 w-5" />
+      </Button>
+    </div>
+
+    <div className="space-y-1 mb-6">
+      <Button
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={() => {
+          onTabChange('operations');
+          onClose();
+        }}
+      >
+        <BarChart3 className="h-4 w-4 mr-3" />
+        Operations
+      </Button>
+      <Button
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={() => {
+          onTabChange('financial');
+          onClose();
+        }}
+      >
+        <DollarSign className="h-4 w-4 mr-3" />
+        Financial
+      </Button>
+      <Button
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={() => {
+          onTabChange('inventory');
+          onClose();
+        }}
+      >
+        <Package className="h-4 w-4 mr-3" />
+        Inventory
+      </Button>
+      <Button
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={() => {
+          onTabChange('reports');
+          onClose();
+        }}
+      >
+        <Download className="h-4 w-4 mr-3" />
+        Reports
+      </Button>
+      <Button
+        variant="ghost"
+        className="w-full justify-start"
+        onClick={onSettings}
+      >
+        <Settings className="h-4 w-4 mr-3" />
+        Settings
+      </Button>
+    </div>
+
+    <div className="border-t pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm text-gray-600">Sync Status</span>
+        <div className={`px-2 py-1 rounded text-xs ${isOnline ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+          {isOnline ? 'Online' : 'Offline'}
+        </div>
+      </div>
+      
+      {pendingSync > 0 && (
+        <div className="mb-3 p-2 bg-yellow-50 rounded-lg">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Recent Expenses</h3>
-            <Button
-              size="sm"
-              onClick={onAddExpense}
-              className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700"
-            >
-              <Plus className="w-3 h-3 mr-1" />
-              Add
+            <span className="text-sm text-yellow-700">{pendingSync} pending sync</span>
+            <Button size="sm" variant="outline" onClick={onSync} className="h-6 px-2 text-xs">
+              <Upload className="h-3 w-3 mr-1" />
+              Sync Now
             </Button>
           </div>
         </div>
-        <div className="p-4">
-          {/* Search and Filter */}
-          <div className="flex gap-2 mb-3">
-            <div className="flex-1">
-              <Input
-                placeholder="Search expenses..."
-                value={searchTerm}
-                onChange={(e) => onSearchChange(e.target.value)}
-                className="h-8 text-sm"
-              />
-            </div>
-            <select
-              className="px-2 py-1 border border-gray-300 rounded-lg bg-white text-gray-900 text-sm h-8"
-              value={filterStatus}
-              onChange={(e) => onFilterChange(e.target.value)}
-            >
-              <option value="all">All</option>
-              <option value="pending">Pending</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-            </select>
-          </div>
+      )}
 
-          {/* Expenses List */}
-          <div className="space-y-2">
-            {filteredExpenses.slice(0, 3).map((expense) => (
-              <div key={expense.id} className="p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-start justify-between mb-1">
-                  <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900 capitalize">
-                      {expense.category}
-                    </p>
-                    <p className="text-xs text-gray-600 truncate">
-                      {expense.description}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-gray-900">
-                      ₵{expense.amount.toFixed(2)}
-                    </p>
-                    <div className="mt-1">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        expense.status === 'approved' ? 'bg-green-100 text-green-700' :
-                        expense.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-red-100 text-red-700'
-                      }`}>
-                        {expense.status}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-xs text-gray-500 mt-2">
-                  <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
-                  <div className="flex gap-1">
-                    {expense.status === 'pending' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-5 px-1 text-green-600"
-                          onClick={() => onUpdateStatus(expense.id, 'approved')}
-                        >
-                          <CheckCircle className="w-3 h-3" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-5 px-1 text-red-600"
-                          onClick={() => onUpdateStatus(expense.id, 'rejected')}
-                        >
-                          <XCircle className="w-3 h-3" />
-                        </Button>
-                      </>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-5 px-1 text-red-600"
-                      onClick={() => onDelete(expense.id)}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {filteredExpenses.length === 0 && (
-              <div className="text-center py-4">
-                <p className="text-sm text-gray-500">
-                  {expenses.length === 0 ? 'No expenses' : 'No matching expenses'}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const MobileQuickActions = ({
-  onStationCheck,
-  onTankDipping,
-  onInventory,
-  onExpense
-}: {
-  onStationCheck: () => void;
-  onTankDipping: () => void;
-  onInventory: () => void;
-  onExpense: () => void;
-}) => (
-  <div className="px-4 mb-4">
-    <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 className="text-sm font-semibold text-gray-900 mb-3">Quick Actions</h3>
-      <div className="grid grid-cols-4 gap-2">
-        <Button
-          variant="outline"
-          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
-          onClick={onStationCheck}
-        >
-          <Building2 className="w-5 h-5 text-gray-700" />
-          <span className="text-xs text-gray-700">Station Check</span>
-        </Button>
-        <Button
-          variant="outline"
-          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
-          onClick={onTankDipping}
-        >
-          <Fuel className="w-5 h-5 text-gray-700" />
-          <span className="text-xs text-gray-700">Tank Dip</span>
-        </Button>
-        <Button
-          variant="outline"
-          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
-          onClick={onInventory}
-        >
-          <Package className="w-5 h-5 text-gray-700" />
-          <span className="text-xs text-gray-700">Inventory</span>
-        </Button>
-        <Button
-          variant="outline"
-          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
-          onClick={onExpense}
-        >
-          <Receipt className="w-5 h-5 text-gray-700" />
-          <span className="text-xs text-gray-700">Expense</span>
-        </Button>
-      </div>
+      <Button
+        variant="outline"
+        className="w-full"
+        onClick={() => {
+          onClose();
+        }}
+      >
+        <Activity className="h-4 w-4 mr-2" />
+        Dashboard
+      </Button>
     </div>
   </div>
-);
-
-const MobileSideMenu = ({ 
-  show, 
-  onClose, 
-  station,
-  user,
-  onNavigate 
-}: { 
-  show: boolean; 
-  onClose: () => void;
-  station: Station | null;
-  user: any;
-  onNavigate: (path: string) => void;
-}) => (
-  <div className={`fixed inset-0 z-50 transform transition-transform duration-300 ${
-    show ? 'translate-x-0' : 'translate-x-full'
-  }`}>
-    <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-    <div className="absolute right-0 top-0 bottom-0 w-72 bg-white shadow-xl">
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-gray-900">Menu</h2>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            className="rounded-full"
-          >
-            <X className="w-5 h-5" />
-          </Button>
-        </div>
-      </div>
-      <div className="p-4">
-        <div className="space-y-4">
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <p className="text-sm font-medium text-gray-900">{station?.name}</p>
-            <p className="text-xs text-gray-600 mt-1">OMC: {station?.omc?.name || 'N/A'}</p>
-            <p className="text-xs text-gray-600">Manager: {user?.name}</p>
-          </div>
-        </div>
-        
-        <div className="space-y-2 mt-6">
-          <Button
-            variant="ghost"
-            className="w-full justify-start"
-            onClick={() => {
-              onNavigate('/dashboard');
-              onClose();
-            }}
-          >
-            <Home className="w-4 h-4 mr-3" />
-            Dashboard
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start"
-            onClick={() => {
-              onNavigate('/settings');
-              onClose();
-            }}
-          >
-            <Settings className="w-4 h-4 mr-3" />
-            Settings
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start"
-            onClick={() => {
-              onNavigate('/reports');
-              onClose();
-            }}
-          >
-            <FileText className="w-4 h-4 mr-3" />
-            Reports
-          </Button>
-        </div>
-      </div>
-      <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
-        <Button
-          variant="outline"
-          className="w-full text-red-600 border-red-200 hover:bg-red-50"
-          onClick={() => {
-            // Handle logout
-            onClose();
-          }}
-        >
-          <LogOut className="w-4 h-4 mr-2" />
-          Logout
-        </Button>
-      </div>
-    </div>
-  </div>
-);
-
-const MobileSalesDialog = ({
-  open,
-  onOpenChange,
-  salesForm,
-  setSalesForm,
-  pumps,
-  selectedPump,
-  setSelectedPump,
-  products,
-  user,
-  getStationPrice,
-  calculateSalesAmount,
-  handleRecordSales,
-  submitting,
-  debugPumpsTable
-}: any) => (
-  <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-w-full h-[90vh] bg-white p-0">
-      <div className="sticky top-0 bg-white border-b border-gray-200 p-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Record Sale</h2>
-          <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
-            <X className="w-5 h-5" />
-          </Button>
-        </div>
-      </div>
-      <div className="p-4 overflow-y-auto h-full">
-        <form onSubmit={handleRecordSales} className="space-y-6">
-          {/* Pump Selection */}
-          <div className="space-y-3">
-            <h3 className="font-medium text-gray-900">Select Pump</h3>
-            {pumps.length === 0 && (
-              <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
-                <p className="text-sm text-yellow-800">No pumps found</p>
-                <Button 
-                  onClick={debugPumpsTable} 
-                  variant="outline" 
-                  size="sm" 
-                  className="mt-2 text-xs"
-                >
-                  Debug Pumps
-                </Button>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              {pumps.map((pump: any) => (
-                <Button
-                  key={pump.id}
-                  type="button"
-                  variant={selectedPump?.id === pump.id ? 'default' : 'outline'}
-                  className={`h-14 flex-col gap-1 ${selectedPump?.id === pump.id ? 'bg-blue-600' : ''}`}
-                  onClick={() => {
-                    setSelectedPump(pump);
-                    const matchingProduct = products.find((p: any) => 
-                      p.name.toLowerCase() === pump.fuel_type?.toLowerCase()
-                    );
-                    const price = getStationPrice(user?.station_id || '', matchingProduct?.id || '') || 0;
-                    setSalesForm({
-                      ...salesForm,
-                      pump_id: pump.id,
-                      product_type: pump.fuel_type || 'Petrol',
-                      product_id: matchingProduct?.id || '',
-                      opening_meter: pump.current_meter_reading?.toString() || '0',
-                      unit_price: price.toString()
-                    });
-                  }}
-                >
-                  <span className="text-xs">{pump.name}</span>
-                  <span className="text-xs opacity-80">{pump.fuel_type}</span>
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          {/* Product Selection */}
-          <div className="space-y-3">
-            <h3 className="font-medium text-gray-900">Product</h3>
-            <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
-              value={salesForm.product_id}
-              onChange={(e) => {
-                const selectedProduct = products.find((p: any) => p.id === e.target.value);
-                const price = getStationPrice(user?.station_id || '', e.target.value) || 0;
-                setSalesForm({ 
-                  ...salesForm, 
-                  product_id: e.target.value,
-                  product_type: selectedProduct?.name || 'Petrol',
-                  unit_price: price.toString()
-                });
-                if (salesForm.opening_meter && salesForm.closing_meter) {
-                  calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, e.target.value);
-                }
-              }}
-              required
-            >
-              <option value="">Select product</option>
-              {products.map((product: any) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Meter Readings */}
-          <div className="space-y-3">
-            <h3 className="font-medium text-gray-900">Meter Readings (L)</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-sm text-gray-700">Opening</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={salesForm.opening_meter}
-                  onChange={(e) => {
-                    setSalesForm({ ...salesForm, opening_meter: e.target.value });
-                    if (e.target.value && salesForm.closing_meter && salesForm.product_id) {
-                      calculateSalesAmount(e.target.value, salesForm.closing_meter, salesForm.product_id);
-                    }
-                  }}
-                  placeholder="0.00"
-                  required
-                  className="bg-white text-gray-900"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-sm text-gray-700">Closing</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={salesForm.closing_meter}
-                  onChange={(e) => {
-                    setSalesForm({ ...salesForm, closing_meter: e.target.value });
-                    if (salesForm.opening_meter && e.target.value && salesForm.product_id) {
-                      calculateSalesAmount(salesForm.opening_meter, e.target.value, salesForm.product_id);
-                    }
-                  }}
-                  placeholder="0.00"
-                  required
-                  className="bg-white text-gray-900"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Calculation Preview */}
-          <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-blue-700">Volume Sold</span>
-              <span className="text-sm font-bold text-blue-800">
-                {salesForm.opening_meter && salesForm.closing_meter 
-                  ? (parseFloat(salesForm.closing_meter) - parseFloat(salesForm.opening_meter)).toFixed(2) 
-                  : '0.00'} L
-              </span>
-            </div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-blue-700">Unit Price</span>
-              <span className="text-sm font-bold text-blue-800">
-                ₵{getStationPrice(user?.station_id || '', salesForm.product_id)?.toFixed(2) || '0.00'}/L
-              </span>
-            </div>
-            <div className="border-t border-blue-200 pt-2 mt-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-blue-700">Total Amount</span>
-                <div className="flex items-center gap-2">
-                  <Calculator className="w-4 h-4 text-blue-600" />
-                  <span className="text-lg font-bold text-blue-700">
-                    ₵{salesForm.calculated_amount}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Date */}
-          <div className="space-y-1">
-            <Label className="text-sm text-gray-700">Date</Label>
-            <Input
-              type="date"
-              value={salesForm.date}
-              onChange={(e) => setSalesForm({ ...salesForm, date: e.target.value })}
-              required
-              className="bg-white text-gray-900"
-            />
-          </div>
-
-          <Button 
-            type="submit" 
-            className="w-full h-12" 
-            style={{ backgroundColor: '#0B2265' }}
-            disabled={submitting || !salesForm.pump_id}
-          >
-            {submitting ? 'Recording...' : 'Record Sale'}
-          </Button>
-        </form>
-      </div>
-    </DialogContent>
-  </Dialog>
 );
 
 // Main Mobile Component
@@ -1142,7 +857,7 @@ export function MobileStationManagerDashboard() {
     refreshPrices 
   } = usePrices();
   
-  // State management (keep same as before)
+  // State management (same as original)
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSync, setPendingSync] = useState(0);
@@ -1152,9 +867,9 @@ export function MobileStationManagerDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [station, setStation] = useState<Station | null>(null);
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  // Data states (keep same as before)
+  // Data states (same as original)
   const [pumps, setPumps] = useState<Pump[]>([]);
   const [selectedPump, setSelectedPump] = useState<Pump | null>(null);
   const [inventoryHistory, setInventoryHistory] = useState<InventoryHistory[]>([]);
@@ -1171,7 +886,7 @@ export function MobileStationManagerDashboard() {
     pending_approval: 0
   });
   
-  // Loading states (keep same as before)
+  // Loading states (same as original)
   const [loadingStates, setLoadingStates] = useState<LoadingStates>({
     sales: false,
     expenses: false,
@@ -1183,7 +898,7 @@ export function MobileStationManagerDashboard() {
     station: false
   });
 
-  // Configuration (keep same as before)
+  // Configuration (same as original)
   const [dashboardConfig, setDashboardConfig] = useState<DashboardConfig>({
     autoRefresh: true,
     refreshInterval: 30000,
@@ -1191,7 +906,7 @@ export function MobileStationManagerDashboard() {
     showNotifications: true
   });
 
-  // Dialog states (keep same as before)
+  // Dialog states (same as original)
   const [showSalesDialog, setShowSalesDialog] = useState(false);
   const [showExpenseDialog, setShowExpenseDialog] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
@@ -1200,7 +915,7 @@ export function MobileStationManagerDashboard() {
   const [showBankDialog, setShowBankDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
 
-  // Form states (keep same as before)
+  // Form states (same as original)
   const [salesForm, setSalesForm] = useState({
     pump_id: '',
     product_type: 'Petrol',
@@ -1260,13 +975,13 @@ export function MobileStationManagerDashboard() {
 
   const [products, setProducts] = useState<Product[]>([]);
 
-  // Refs (keep same as before)
+  // Refs (same as original)
   const initializedRef = useRef(false);
   const syncIntervalRef = useRef<NodeJS.Timeout>();
   const priceLoadAttemptedRef = useRef(false);
   const realtimeSubscriptionRef = useRef<any>(null);
 
-  // Loading state helpers (keep same as before)
+  // Loading state helpers (same as original)
   const setLoading = useCallback((key: keyof LoadingStates, loading: boolean) => {
     setLoadingStates(prev => ({ ...prev, [key]: loading }));
   }, []);
@@ -1275,7 +990,7 @@ export function MobileStationManagerDashboard() {
     return Object.values(loadingStates).some(state => state);
   }, [loadingStates]);
 
-  // Keep all existing functions exactly as they are
+  // Data loading functions (same as original - keep all original functions)
   const loadStation = useCallback(async () => {
     if (!user?.station_id) {
       console.log('❌ No station ID available');
@@ -1737,6 +1452,7 @@ export function MobileStationManagerDashboard() {
     }
   }, [user?.station_id, pumpPrices, fuelStockCard, setLoading]);
 
+  // Calculation and sync functions (same as original)
   const calculateSalesAmount = useCallback((openingMeter: string, closingMeter: string, productId: string) => {
     console.log('🔄 Calculating sales amount:', { openingMeter, closingMeter, productId });
     
@@ -1800,6 +1516,7 @@ export function MobileStationManagerDashboard() {
     }
   }, [loadDailyReport, loadExpenses, updatePendingCount, refreshPrices]);
 
+  // Form handlers (same as original - keep all original handlers)
   const handleRecordSales = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id || !salesForm.pump_id) {
@@ -2166,6 +1883,7 @@ export function MobileStationManagerDashboard() {
     }
   };
 
+  // Form reset functions (same as original)
   const resetSalesForm = () => {
     if (selectedPump) {
       const matchingProduct = products.find(p => 
@@ -2258,6 +1976,7 @@ export function MobileStationManagerDashboard() {
     });
   };
 
+  // Debug function (same as original)
   const debugPumpsTable = async () => {
     if (!user?.station_id) return;
     
@@ -2289,7 +2008,25 @@ export function MobileStationManagerDashboard() {
     }
   };
 
-  // Effects (keep same as before)
+  // Filtered data (same as original)
+  const filteredExpenses = useMemo(() => {
+    let filtered = expenses;
+    
+    if (searchTerm) {
+      filtered = filtered.filter(expense =>
+        expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        expense.category.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(expense => expense.status === filterStatus);
+    }
+    
+    return filtered;
+  }, [expenses, searchTerm, filterStatus]);
+
+  // Effects (same as original)
   useEffect(() => {
     if (initializedRef.current || !user?.station_id) return;
     
@@ -2319,6 +2056,7 @@ export function MobileStationManagerDashboard() {
 
     initializeDashboard();
 
+    // Set up periodic sync
     if (dashboardConfig.autoRefresh) {
       syncIntervalRef.current = setInterval(() => {
         if (isOnline && pendingSync > 0) {
@@ -2334,13 +2072,16 @@ export function MobileStationManagerDashboard() {
     };
   }, [user?.station_id, dashboardConfig.autoRefresh, dashboardConfig.refreshInterval]);
 
+  // Real-time subscriptions (same as original)
   useEffect(() => {
     if (!user?.station_id) return;
 
+    // Clean up existing subscription
     if (realtimeSubscriptionRef.current) {
       realtimeSubscriptionRef.current.unsubscribe();
     }
 
+    // Subscribe to sales changes
     realtimeSubscriptionRef.current = supabase
       .channel('station-dashboard')
       .on(
@@ -2377,6 +2118,7 @@ export function MobileStationManagerDashboard() {
     };
   }, [user?.station_id]);
 
+  // Network status (same as original)
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -2396,12 +2138,14 @@ export function MobileStationManagerDashboard() {
     };
   }, [syncOfflineData, pendingSync]);
 
+  // Sales calculation effect (same as original)
   useEffect(() => {
     if (salesForm.opening_meter && salesForm.closing_meter && salesForm.product_id) {
       calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id);
     }
   }, [salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id, calculateSalesAmount]);
 
+  // Pump selection effect (same as original)
   useEffect(() => {
     if (selectedPump) {
       const matchingProduct = products.find(p => 
@@ -2435,22 +2179,44 @@ export function MobileStationManagerDashboard() {
     }
   }, [selectedPump, user?.station_id, getStationPrice, products]);
 
+  // Handle refresh
+  const handleRefresh = async () => {
+    await loadDailyReport();
+    await loadPumpPrices(true);
+    await loadFuelStockCard();
+    await loadPumps();
+  };
+
   if (isLoading() && !dailyReport) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3">
+        {/* Header Skeleton */}
+        <div className="sticky top-0 z-50 bg-white border-b px-4 py-3">
           <div className="flex items-center justify-between">
-            <Skeleton className="h-8 w-32" />
-            <Skeleton className="h-8 w-8 rounded-full" />
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-10 w-10 rounded-lg" />
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            </div>
+            <Skeleton className="h-10 w-24 rounded-lg" />
           </div>
         </div>
-        <div className="p-4">
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 rounded-xl" />
-            ))}
-          </div>
-          <Skeleton className="h-64 w-full rounded-xl mb-4" />
+
+        {/* Stats Grid Skeleton */}
+        <div className="grid grid-cols-2 gap-3 px-4 mb-6 mt-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-xl p-4 border">
+              <Skeleton className="h-4 w-16 mb-2" />
+              <Skeleton className="h-6 w-20" />
+            </div>
+          ))}
+        </div>
+
+        {/* Content Skeleton */}
+        <div className="px-4 space-y-4">
+          <Skeleton className="h-12 w-full rounded-xl" />
           <Skeleton className="h-64 w-full rounded-xl" />
         </div>
       </div>
@@ -2458,289 +2224,453 @@ export function MobileStationManagerDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-16">
-      <MobileHeader
+    <div className="min-h-screen bg-gray-50 pb-20">
+      <MobileHeader 
         station={station}
+        user={user}
+        onMenuClick={() => setIsMenuOpen(true)}
+        onRefresh={handleRefresh}
+        isLoading={isLoading()}
         isOnline={isOnline}
         pendingSync={pendingSync}
-        onMenuPress={() => setShowMobileMenu(true)}
-        onSyncPress={syncOfflineData}
-        onRefreshPress={async () => {
-          await loadDailyReport();
-          await loadPumpPrices(true);
-          await loadFuelStockCard();
-          await loadPumps();
-        }}
-        isLoading={isLoading()}
       />
 
-      <MobileTabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* Navigation Menu */}
+      <Sheet open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+        <SheetContent side="left" className="w-[280px] p-0">
+          <MobileNavigationMenu 
+            onClose={() => setIsMenuOpen(false)}
+            onTabChange={setActiveTab}
+            onSync={syncOfflineData}
+            onSettings={() => setShowSettingsDialog(true)}
+            pendingSync={pendingSync}
+            isOnline={isOnline}
+          />
+        </SheetContent>
+      </Sheet>
 
-      <div className="pb-20">
-        {activeTab === 'operations' && (
-          <>
-            <MobileStatsCard
-              dailyReport={dailyReport}
-              expenseStats={expenseStats}
-              fuelStockCard={fuelStockCard}
-              pumps={pumps}
-            />
-            
-            <MobilePumpPrices
-              pumpPrices={pumpPrices}
-              loading={loadingStates.prices}
-              onRefresh={() => loadPumpPrices(true)}
-            />
-            
-            <MobileSalesCard
-              dailyReport={dailyReport}
-              onRecordSale={() => setShowSalesDialog(true)}
-              onDebugPumps={debugPumpsTable}
-            />
-            
-            <MobileExpensesCard
-              expenses={expenses}
-              searchTerm={searchTerm}
-              filterStatus={filterStatus}
-              onSearchChange={setSearchTerm}
-              onFilterChange={setFilterStatus}
-              onAddExpense={() => setShowExpenseDialog(true)}
-              onUpdateStatus={handleUpdateExpenseStatus}
-              onDelete={handleDeleteExpense}
-            />
-            
-            <MobileQuickActions
-              onStationCheck={() => setShowStationCheckDialog(true)}
-              onTankDipping={() => setShowTankDippingDialog(true)}
-              onInventory={() => setShowInventoryDialog(true)}
-              onExpense={() => setShowExpenseDialog(true)}
-            />
-          </>
-        )}
-
-        {activeTab === 'financial' && (
-          <div className="px-4 mt-4">
-            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
-              <LazyBankDeposits 
-                stationId={user?.station_id || ''} 
-                banks={banks}
-                onBankAdded={loadBanks}
-                showAddBank={true}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {activeTab === 'inventory' && (
-          <div className="px-4 mt-4 space-y-4">
-            {/* Current Stock */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3">Current Stock</h3>
-              <div className="space-y-3">
-                {fuelStockCard.map((item) => (
-                  <div key={item.product_id} className="p-3 bg-gray-50 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
-                        <p className="text-xs text-gray-600">
-                          Updated: {new Date(item.last_updated).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-blue-600">
-                          {item.current_stock?.toLocaleString()}{item.unit}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {fuelStockCard.length === 0 && (
-                  <div className="text-center py-4">
-                    <p className="text-sm text-gray-500">No stock data available</p>
-                  </div>
-                )}
-              </div>
+      {/* Sync Banner */}
+      {pendingSync > 0 && isOnline && (
+        <div className="px-4 py-2 bg-yellow-50 border-y border-yellow-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-yellow-600" />
+              <span className="text-sm text-yellow-700">{pendingSync} pending sync</span>
             </div>
-
-            {/* Inventory History */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-900">Recent Stock History</h3>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setShowInventoryDialog(true)}
-                >
-                  <Plus className="w-3 h-3 mr-1" />
-                  Add
-                </Button>
-              </div>
-              <div className="space-y-3">
-                {inventoryHistory.slice(0, 3).map((item) => (
-                  <div key={item.id} className="p-3 bg-gray-50 rounded-lg">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{item.products?.name || 'Unknown'}</p>
-                        <p className="text-xs text-gray-600">
-                          {new Date(item.stock_date).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-600">O: {item.opening_stock}L</p>
-                        <p className="text-sm text-gray-600">R: {item.received}L</p>
-                        <p className="text-sm font-semibold text-gray-900">C: {item.closing_stock}L</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {inventoryHistory.length === 0 && (
-                  <div className="text-center py-4">
-                    <p className="text-sm text-gray-500">No inventory history</p>
-                  </div>
-                )}
-              </div>
-            </div>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              onClick={syncOfflineData}
+              className="h-6 px-2 text-xs"
+            >
+              <Upload className="h-3 w-3 mr-1" />
+              Sync Now
+            </Button>
           </div>
-        )}
-
-        {activeTab === 'equipment' && (
-          <div className="px-4 mt-4">
-            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
-              <LazyPumpCalibration 
-                stationId={user?.station_id || ''} 
-                pumps={pumps}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {activeTab === 'reports' && (
-          <div className="px-4 mt-4">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Export Reports</h3>
-              <div className="space-y-3">
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (dailyReport?.sales.length) {
-                      exportToCSV(dailyReport.sales, 'sales-report');
-                    } else {
-                      toast.error('No sales data to export');
-                    }
-                  }}
-                  disabled={!dailyReport?.sales.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Sales Report ({dailyReport?.sales.length || 0})
-                </Button>
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (expenses.length) {
-                      exportToCSV(expenses, 'expenses-report');
-                    } else {
-                      toast.error('No expenses data to export');
-                    }
-                  }}
-                  disabled={!expenses.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Expense Report ({expenses.length})
-                </Button>
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (inventoryHistory.length) {
-                      exportToCSV(inventoryHistory, 'inventory-report');
-                    } else {
-                      toast.error('No inventory data to export');
-                    }
-                  }}
-                  disabled={!inventoryHistory.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Inventory Report ({inventoryHistory.length})
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Dialogs */}
-      <MobileSalesDialog
-        open={showSalesDialog}
-        onOpenChange={setShowSalesDialog}
-        salesForm={salesForm}
-        setSalesForm={setSalesForm}
-        pumps={pumps}
-        selectedPump={selectedPump}
-        setSelectedPump={setSelectedPump}
-        products={products}
-        user={user}
-        getStationPrice={getStationPrice}
-        calculateSalesAmount={calculateSalesAmount}
-        handleRecordSales={handleRecordSales}
-        submitting={submitting}
-        debugPumpsTable={debugPumpsTable}
-      />
-
-      {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-around">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'operations' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('operations')}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="text-xs mt-1">Operations</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'financial' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('financial')}
-          >
-            <DollarSign className="w-5 h-5" />
-            <span className="text-xs mt-1">Finance</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'inventory' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('inventory')}
-          >
-            <Package className="w-5 h-5" />
-            <span className="text-xs mt-1">Stock</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'reports' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('reports')}
-          >
-            <Download className="w-5 h-5" />
-            <span className="text-xs mt-1">Reports</span>
-          </Button>
         </div>
-      </div>
+      )}
 
-      <MobileSideMenu
-        show={showMobileMenu}
-        onClose={() => setShowMobileMenu(false)}
-        station={station}
-        user={user}
-        onNavigate={(path) => {
-          console.log('Navigate to:', path);
-          // Implement navigation logic here
-        }}
+      <MobileStatsGrid 
+        dailyReport={dailyReport}
+        expenseStats={expenseStats}
+        fuelStockCard={fuelStockCard}
+        pumps={pumps}
       />
+
+      <MobileTabNavigation 
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      />
+
+      {activeTab === 'operations' && (
+        <div className="space-y-6">
+          <MobileQuickActions 
+            onSalesClick={() => setShowSalesDialog(true)}
+            onExpenseClick={() => setShowExpenseDialog(true)}
+            onInventoryClick={() => setShowInventoryDialog(true)}
+            onCheckClick={() => setShowStationCheckDialog(true)}
+            onTankDippingClick={() => setShowTankDippingDialog(true)}
+          />
+
+          <MobilePumpPrices 
+            prices={pumpPrices}
+            loading={loadingStates.prices}
+          />
+
+          <MobileSalesList sales={dailyReport?.sales || []} />
+
+          <MobileExpensesList 
+            expenses={expenses}
+            onApprove={(id) => handleUpdateExpenseStatus(id, 'approved')}
+            onReject={(id) => handleUpdateExpenseStatus(id, 'rejected')}
+            onDelete={handleDeleteExpense}
+          />
+        </div>
+      )}
+
+      {activeTab === 'inventory' && (
+        <div className="space-y-6">
+          <MobileFuelStock stock={fuelStockCard} />
+
+          <div className="px-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-gray-900">Inventory History</h3>
+              <Button variant="ghost" size="sm" className="text-xs">
+                View All
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {inventoryHistory.slice(0, 5).map((item) => (
+                <div key={item.id} className="bg-white rounded-lg p-3 border">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{item.products?.name || 'Unknown'}</p>
+                      <p className="text-xs text-gray-600">
+                        {new Date(item.stock_date).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-600">Opening: {item.opening_stock}L</p>
+                      <p className="text-xs text-gray-600">Received: {item.received}L</p>
+                      <p className="text-sm font-semibold text-gray-900">Closing: {item.closing_stock}L</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {inventoryHistory.length === 0 && (
+                <div className="text-center py-4 text-gray-500">
+                  <p className="text-sm">No inventory history</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'financial' && (
+        <Suspense fallback={
+          <div className="px-4">
+            <Skeleton className="h-64 w-full rounded-xl" />
+          </div>
+        }>
+          <LazyBankDeposits 
+            stationId={user?.station_id || ''} 
+            banks={banks}
+            onBankAdded={loadBanks}
+            showAddBank={true}
+            mobileView={true}
+          />
+        </Suspense>
+      )}
+
+      {activeTab === 'reports' && (
+        <div className="px-4 space-y-4">
+          <div className="bg-white rounded-xl p-4 border">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Export Reports</h3>
+            <div className="space-y-2">
+              <Button 
+                className="w-full" 
+                variant="outline"
+                onClick={handleExportSales}
+                disabled={!dailyReport?.sales.length}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Sales Report ({dailyReport?.sales.length || 0})
+              </Button>
+              <Button 
+                className="w-full" 
+                variant="outline"
+                onClick={handleExportExpenses}
+                disabled={!expenses.length}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Expense Report ({expenses.length})
+              </Button>
+              <Button 
+                className="w-full" 
+                variant="outline"
+                onClick={handleExportInventory}
+                disabled={!inventoryHistory.length}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Inventory Report ({inventoryHistory.length})
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialogs (Keep all original dialogs - they work fine on mobile) */}
+      {/* Sales Dialog */}
+      <Dialog open={showSalesDialog} onOpenChange={setShowSalesDialog}>
+        <DialogContent className="max-w-[95vw] bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Record Sales</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto">
+            <form onSubmit={handleRecordSales} className="space-y-4">
+              <div>
+                <Label className="text-gray-700">Select Pump</Label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
+                  value={selectedPump?.id || ''}
+                  onChange={(e) => {
+                    const pump = pumps.find(p => p.id === e.target.value);
+                    setSelectedPump(pump || null);
+                  }}
+                  required
+                >
+                  <option value="">Select a pump</option>
+                  {pumps.map((pump) => (
+                    <option key={pump.id} value={pump.id}>
+                      {pump.name} (No: {pump.number}) - {pump.fuel_type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-gray-700">Opening Meter (L)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={salesForm.opening_meter}
+                    onChange={(e) => {
+                      setSalesForm({ ...salesForm, opening_meter: e.target.value });
+                      if (e.target.value && salesForm.closing_meter && salesForm.product_id) {
+                        calculateSalesAmount(e.target.value, salesForm.closing_meter, salesForm.product_id);
+                      }
+                    }}
+                    placeholder="0.00"
+                    required
+                    className="bg-white text-gray-900"
+                  />
+                </div>
+                <div>
+                  <Label className="text-gray-700">Closing Meter (L)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={salesForm.closing_meter}
+                    onChange={(e) => {
+                      setSalesForm({ ...salesForm, closing_meter: e.target.value });
+                      if (salesForm.opening_meter && e.target.value && salesForm.product_id) {
+                        calculateSalesAmount(salesForm.opening_meter, e.target.value, salesForm.product_id);
+                      }
+                    }}
+                    placeholder="0.00"
+                    required
+                    className="bg-white text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm text-blue-700">Volume Sold:</span>
+                  <span className="font-bold text-blue-800">
+                    {salesForm.opening_meter && salesForm.closing_meter 
+                      ? (parseFloat(salesForm.closing_meter) - parseFloat(salesForm.opening_meter)).toFixed(2) 
+                      : '0.00'} L
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-blue-700">Total Amount:</span>
+                  <span className="text-lg font-bold text-blue-800">
+                    ₵{salesForm.calculated_amount}
+                  </span>
+                </div>
+              </div>
+
+              <Button 
+                type="submit" 
+                className="w-full" 
+                style={{ backgroundColor: '#0B2265' }}
+                disabled={submitting || !salesForm.pump_id}
+              >
+                {submitting ? 'Recording...' : 'Save Sale'}
+              </Button>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Expense Dialog */}
+      <Dialog open={showExpenseDialog} onOpenChange={setShowExpenseDialog}>
+        <DialogContent className="max-w-[95vw] bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Add Expense</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto">
+            <form onSubmit={handleRecordExpense} className="space-y-4">
+              <div>
+                <Label className="text-gray-700">Description</Label>
+                <Input
+                  value={expenseForm.description}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
+                  placeholder="Expense description"
+                  required
+                  className="bg-white text-gray-900"
+                />
+              </div>
+
+              <div>
+                <Label className="text-gray-700">Amount (₵)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={expenseForm.amount}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                  placeholder="0.00"
+                  required
+                  className="bg-white text-gray-900"
+                />
+              </div>
+
+              <div>
+                <Label className="text-gray-700">Category</Label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
+                  value={expenseForm.category}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
+                >
+                  <option value="operational">Operational</option>
+                  <option value="maintenance">Maintenance</option>
+                  <option value="staff">Staff</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              <Button 
+                type="submit" 
+                className="w-full" 
+                style={{ backgroundColor: '#0B2265' }}
+                disabled={submitting}
+              >
+                {submitting ? 'Recording...' : 'Record Expense'}
+              </Button>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Inventory Dialog */}
+      <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
+        <DialogContent className="max-w-[95vw] bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Inventory</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto">
+            <form onSubmit={handleInventory} className="space-y-4">
+              <div>
+                <Label className="text-gray-700">Product Type</Label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
+                  value={inventoryForm.product_type}
+                  onChange={(e) => {
+                    const selectedProduct = products.find(p => p.name === e.target.value);
+                    setInventoryForm({ 
+                      ...inventoryForm, 
+                      product_type: e.target.value,
+                      product_id: selectedProduct?.id || '' 
+                    });
+                  }}
+                >
+                  {products.map((product) => (
+                    <option key={product.id} value={product.name}>
+                      {product.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-gray-700">Opening Stock (L)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={inventoryForm.opening_stock}
+                    onChange={(e) => setInventoryForm({ ...inventoryForm, opening_stock: e.target.value })}
+                    required
+                    className="bg-white text-gray-900"
+                  />
+                </div>
+                <div>
+                  <Label className="text-gray-700">Closing Stock (L)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    value={inventoryForm.closing_stock}
+                    onChange={(e) => setInventoryForm({ ...inventoryForm, closing_stock: e.target.value })}
+                    required
+                    className="bg-white text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <Button 
+                type="submit" 
+                className="w-full" 
+                style={{ backgroundColor: '#0B2265' }}
+                disabled={submitting}
+              >
+                {submitting ? 'Saving...' : 'Save Inventory'}
+              </Button>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
+        <DialogContent className="max-w-[95vw] bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Settings</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] overflow-y-auto space-y-4">
+            <div>
+              <Label className="text-gray-700">Default Tab</Label>
+              <select
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg mt-1 bg-white text-gray-900"
+                value={dashboardConfig.defaultView}
+                onChange={(e) => setDashboardConfig(prev => ({ ...prev, defaultView: e.target.value }))}
+              >
+                <option value="operations">Operations</option>
+                <option value="financial">Financial</option>
+                <option value="inventory">Inventory</option>
+                <option value="reports">Reports</option>
+              </select>
+            </div>
+
+            <Button 
+              onClick={() => {
+                setShowSettingsDialog(false);
+                toast.success('Settings saved');
+              }}
+              className="w-full" 
+              style={{ backgroundColor: '#0B2265' }}
+            >
+              Save Settings
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile Support Button */}
+      <div className="fixed bottom-6 right-6">
+        <Button
+          size="lg"
+          className="rounded-full w-14 h-14 shadow-2xl"
+          style={{ backgroundColor: '#0B2265' }}
+          onClick={() => {
+            // Support action
+          }}
+        >
+          <AlertCircle className="h-6 w-6" />
+        </Button>
+      </div>
     </div>
   );
 }
