@@ -318,14 +318,8 @@ const validateInventoryForm = (form: any): string[] => {
   if (opening < 0) errors.push('Opening stock cannot be negative');
   if (received < 0) errors.push('Received quantity cannot be negative');
   
-  const expectedClosing = opening + received;
-  if (Math.abs(closing - expectedClosing) > expectedClosing * 0.1) {
-    errors.push('Closing stock differs significantly from expected value. Please verify.');
-  }
-  
   return errors;
 };
-
 // Components
 const FormSection = ({ 
   title, 
