@@ -1,4 +1,3 @@
-// src/pages/mobile/MobileSettings.tsx
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,15 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { 
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 import { 
   Bell, 
   Shield, 
@@ -29,12 +22,14 @@ import {
   CheckCircle2,
   AlertTriangle,
   Building2,
+  CreditCard,
   Download,
   Upload,
   Trash2,
   Key,
   Mail,
   Phone,
+  MapPin,
   Clock,
   Wifi,
   WifiOff,
@@ -43,20 +38,12 @@ import {
   AlertCircle,
   XCircle,
   ChevronRight,
-  ChevronDown,
   Menu,
+  X,
   Home,
+  Settings as SettingsIcon,
   LogOut,
-  Info,
-  HelpCircle,
-  Battery,
-  BatteryCharging,
-  Cloud,
-  CloudOff,
-  Lock,
-  Unlock,
-  ShieldCheck,
-  Smartphone as MobilePhone,
+  ChevronLeft
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -69,12 +56,16 @@ interface UserSettings {
     lastName: string;
     email: string;
     phone: string;
+    avatar?: string;
   };
   notifications: {
     salesAlerts: boolean;
     lowStockWarnings: boolean;
     priceChanges: boolean;
     shiftUpdates: boolean;
+    systemMaintenance: boolean;
+    emailNotifications: boolean;
+    smsNotifications: boolean;
     pushNotifications: boolean;
   };
   security: {
@@ -87,204 +78,36 @@ interface UserSettings {
     theme: 'light' | 'dark' | 'system';
     language: string;
     timezone: string;
+    dateFormat: string;
     currency: string;
     offlineMode: boolean;
     autoSync: boolean;
+    dataRetention: number;
+  };
+  roleSettings: {
+    stationAccess: string[];
+    reportAccess: string[];
+    canManageUsers: boolean;
+    canConfigurePrices: boolean;
+    canApproveExpenses: boolean;
+    maxDiscountLimit: number;
   };
 }
 
-// Mobile-specific components
-const MobileStatusBar = ({ isOnline, batteryLevel, isCharging }: { 
-  isOnline: boolean; 
-  batteryLevel: number;
-  isCharging: boolean;
-}) => (
-  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-2">
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {isOnline ? (
-          <div className="flex items-center gap-1">
-            <Wifi className="w-3 h-3 text-green-600" />
-            <span className="text-xs text-green-700">Online</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1">
-            <WifiOff className="w-3 h-3 text-orange-600" />
-            <span className="text-xs text-orange-700">Offline</span>
-          </div>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1">
-          {isCharging ? (
-            <BatteryCharging className="w-3 h-3 text-green-600" />
-          ) : (
-            <Battery className="w-3 h-3 text-gray-600" />
-          )}
-          <span className="text-xs">{batteryLevel}%</span>
-        </div>
-        <span className="text-xs text-gray-500">
-          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
-      </div>
-    </div>
-  </div>
-);
-
-const MobileSettingItem = ({ 
-  icon: Icon, 
-  title, 
-  value, 
-  badge,
-  onClick,
-  isDanger = false
-}: { 
-  icon: React.ElementType; 
-  title: string; 
-  value?: string;
-  badge?: React.ReactNode;
-  onClick?: () => void;
-  isDanger?: boolean;
-}) => (
-  <button
-    onClick={onClick}
-    className={`w-full p-4 flex items-center justify-between rounded-xl active:scale-98 transition-transform ${
-      isDanger 
-        ? 'bg-red-50 hover:bg-red-100 border-red-200 border' 
-        : 'bg-gray-50 hover:bg-gray-100'
-    }`}
-  >
-    <div className="flex items-center gap-3">
-      <div className={`p-2 rounded-lg ${
-        isDanger ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
-      }`}>
-        <Icon className="w-5 h-5" />
-      </div>
-      <div className="text-left">
-        <p className="font-medium text-gray-900">{title}</p>
-        {value && <p className="text-sm text-gray-600">{value}</p>}
-      </div>
-    </div>
-    <div className="flex items-center gap-2">
-      {badge}
-      <ChevronRight className="w-4 h-4 text-gray-400" />
-    </div>
-  </button>
-);
-
-const MobileSwitchItem = ({ 
-  icon: Icon, 
-  title, 
-  description, 
-  checked, 
-  onChange,
-  iconColor = "blue"
-}: { 
-  icon: React.ElementType; 
-  title: string; 
-  description?: string;
-  checked: boolean; 
-  onChange: (checked: boolean) => void;
-  iconColor?: "blue" | "green" | "orange" | "red";
-}) => {
-  const colorClasses = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-green-100 text-green-600',
-    orange: 'bg-orange-100 text-orange-600',
-    red: 'bg-red-100 text-red-600'
-  };
-
-  return (
-    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded-lg ${colorClasses[iconColor]}`}>
-          <Icon className="w-5 h-5" />
-        </div>
-        <div className="text-left">
-          <p className="font-medium text-gray-900">{title}</p>
-          {description && <p className="text-sm text-gray-600">{description}</p>}
-        </div>
-      </div>
-      <Switch
-        checked={checked}
-        onCheckedChange={onChange}
-      />
-    </div>
-  );
-};
-
-const PullToRefresh = ({ onRefresh, refreshing }: { 
-  onRefresh: () => void; 
-  refreshing: boolean;
-}) => {
-  const [startY, setStartY] = useState(0);
-  const [currentY, setCurrentY] = useState(0);
-  const [refreshingState, setRefreshingState] = useState(false);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (window.scrollY === 0) {
-      setStartY(e.touches[0].clientY);
-      setCurrentY(e.touches[0].clientY);
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (window.scrollY === 0 && startY > 0) {
-      setCurrentY(e.touches[0].clientY);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    const pullDistance = currentY - startY;
-    if (pullDistance > 100 && !refreshing) {
-      setRefreshingState(true);
-      onRefresh();
-      setTimeout(() => setRefreshingState(false), 1000);
-    }
-    setStartY(0);
-    setCurrentY(0);
-  };
-
-  const pullDistance = Math.max(0, currentY - startY);
-  const progress = Math.min(100, (pullDistance / 100) * 100);
-
-  if (refreshing || refreshingState) {
-    return (
-      <div className="flex items-center justify-center py-3 bg-blue-50">
-        <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
-        <span className="ml-2 text-sm text-blue-600">Refreshing...</span>
-      </div>
-    );
-  }
-
-  if (pullDistance > 0) {
-    return (
-      <div 
-        className="flex items-center justify-center py-3"
-        style={{
-          height: `${Math.min(100, pullDistance)}px`,
-          background: `linear-gradient(to bottom, rgba(59, 130, 246, ${progress/100}), white)`
-        }}
-      >
-        <RefreshCw className="w-5 h-5 text-blue-600" style={{ transform: `rotate(${progress * 3.6}deg)` }} />
-        <span className="ml-2 text-sm text-blue-600">
-          {progress >= 100 ? 'Release to refresh' : 'Pull to refresh'}
-        </span>
-      </div>
-    );
-  }
-
-  return null;
-};
+interface AuditLog {
+  id: string;
+  action: string;
+  description: string;
+  timestamp: string;
+  ipAddress: string;
+  userAgent: string;
+}
 
 export default function MobileSettings() {
-  const [activeSection, setActiveSection] = useState<'profile' | 'notifications' | 'security' | 'preferences' | 'advanced'>('profile');
+  const [activeTab, setActiveTab] = useState('profile');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [batteryLevel, setBatteryLevel] = useState(100);
-  const [isCharging, setIsCharging] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -299,12 +122,10 @@ export default function MobileSettings() {
       hasSpecialChar: false
     }
   });
-  const [showProfileSheet, setShowProfileSheet] = useState(false);
-  const [showSecuritySheet, setShowSecuritySheet] = useState(false);
-  const [showAboutSheet, setShowAboutSheet] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
   
   const { toast } = useToast();
-  const { user, updateUserProfile, logout } = useAuth();
+  const { user, updateUserProfile } = useAuth();
   const navigate = useNavigate();
 
   const [settings, setSettings] = useState<UserSettings>({
@@ -319,6 +140,9 @@ export default function MobileSettings() {
       lowStockWarnings: true,
       priceChanges: false,
       shiftUpdates: true,
+      systemMaintenance: true,
+      emailNotifications: true,
+      smsNotifications: false,
       pushNotifications: true,
     },
     security: {
@@ -330,11 +154,21 @@ export default function MobileSettings() {
     preferences: {
       theme: 'light',
       language: 'en',
-      timezone: 'Africa/Accra',
+      timezone: 'UTC',
+      dateFormat: 'DD/MM/YYYY',
       currency: 'GHS',
       offlineMode: true,
       autoSync: true,
+      dataRetention: 90,
     },
+    roleSettings: {
+      stationAccess: [],
+      reportAccess: [],
+      canManageUsers: false,
+      canConfigurePrices: false,
+      canApproveExpenses: false,
+      maxDiscountLimit: 0,
+    }
   });
 
   const [passwordForm, setPasswordForm] = useState({
@@ -348,14 +182,18 @@ export default function MobileSettings() {
     { value: 'en', label: 'English' },
     { value: 'fr', label: 'French' },
     { value: 'es', label: 'Spanish' },
+    { value: 'pt', label: 'Portuguese' },
+    { value: 'ar', label: 'Arabic' },
   ];
 
   // Available timezones
   const timezones = [
+    'UTC',
     'Africa/Accra',
     'Africa/Lagos',
     'Africa/Nairobi',
-    'UTC',
+    'Europe/London',
+    'America/New_York',
   ];
 
   // Available currencies
@@ -363,61 +201,20 @@ export default function MobileSettings() {
     { value: 'GHS', label: 'Ghana Cedi (₵)' },
     { value: 'USD', label: 'US Dollar ($)' },
     { value: 'EUR', label: 'Euro (€)' },
+    { value: 'GBP', label: 'British Pound (£)' },
   ];
-
-  // Battery monitoring
-  useEffect(() => {
-    const updateBattery = async () => {
-      try {
-        if ('getBattery' in navigator) {
-          const battery = await (navigator as any).getBattery();
-          
-          const updateBatteryInfo = () => {
-            setBatteryLevel(Math.round(battery.level * 100));
-            setIsCharging(battery.charging);
-          };
-          
-          updateBatteryInfo();
-          
-          battery.addEventListener('levelchange', updateBatteryInfo);
-          battery.addEventListener('chargingchange', updateBatteryInfo);
-          
-          return () => {
-            battery.removeEventListener('levelchange', updateBatteryInfo);
-            battery.removeEventListener('chargingchange', updateBatteryInfo);
-          };
-        }
-      } catch (error) {
-        console.error('Battery API not supported:', error);
-      }
-    };
-
-    updateBattery();
-  }, []);
-
-  // Network status
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
 
   useEffect(() => {
     loadSettings();
+    loadAuditLogs();
   }, []);
 
   const loadSettings = async () => {
     try {
       setLoading(true);
       
-      const savedSettings = localStorage.getItem('mobile_settings');
+      // Load from API or local storage
+      const savedSettings = localStorage.getItem('pumpguard_user_settings');
       if (savedSettings) {
         setSettings(JSON.parse(savedSettings));
       } else {
@@ -443,24 +240,60 @@ export default function MobileSettings() {
     } catch (error: any) {
       console.error('Error loading settings:', error);
       setSettings(getDefaultSettings());
+      toast({
+        title: "Using Default Settings",
+        description: "Could not load your saved settings. Using default values.",
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  const loadAuditLogs = async () => {
+    try {
+      // Simulate loading audit logs
+      const mockLogs: AuditLog[] = [
+        {
+          id: '1',
+          action: 'Password Change',
+          description: 'Password was successfully changed',
+          timestamp: new Date(Date.now() - 3600000).toISOString(),
+          ipAddress: '192.168.1.1',
+          userAgent: 'Chrome/Windows'
+        },
+        {
+          id: '2',
+          action: 'Profile Update',
+          description: 'Updated personal information',
+          timestamp: new Date(Date.now() - 86400000).toISOString(),
+          ipAddress: '192.168.1.1',
+          userAgent: 'Chrome/Windows'
+        }
+      ];
+      setAuditLogs(mockLogs);
+    } catch (error) {
+      console.error('Error loading audit logs:', error);
+    }
+  };
+
   const getDefaultSettings = (): UserSettings => {
-    return {
+    const baseSettings = {
       profile: {
         firstName: '',
         lastName: '',
         email: user?.email || '',
         phone: '',
+        avatar: '',
       },
       notifications: {
         salesAlerts: true,
         lowStockWarnings: true,
         priceChanges: false,
         shiftUpdates: true,
+        systemMaintenance: true,
+        emailNotifications: true,
+        smsNotifications: false,
         pushNotifications: true,
       },
       security: {
@@ -473,25 +306,89 @@ export default function MobileSettings() {
         theme: 'light',
         language: 'en',
         timezone: 'Africa/Accra',
+        dateFormat: 'DD/MM/YYYY',
         currency: 'GHS',
         offlineMode: true,
         autoSync: true,
+        dataRetention: 90,
       },
+      roleSettings: {
+        stationAccess: [],
+        reportAccess: ['sales', 'inventory'],
+        canManageUsers: false,
+        canConfigurePrices: false,
+        canApproveExpenses: false,
+        maxDiscountLimit: 0,
+      }
     };
-  };
 
-  const refreshAllData = async () => {
-    setRefreshing(true);
-    await loadSettings();
-    setRefreshing(false);
+    // Role-based settings
+    if (user) {
+      switch (user.role) {
+        case 'admin':
+          baseSettings.roleSettings = {
+            stationAccess: ['all'],
+            reportAccess: ['all'],
+            canManageUsers: true,
+            canConfigurePrices: true,
+            canApproveExpenses: true,
+            maxDiscountLimit: 1000,
+          };
+          break;
+        case 'omc':
+          baseSettings.roleSettings = {
+            stationAccess: ['all'],
+            reportAccess: ['sales', 'inventory', 'financial'],
+            canManageUsers: true,
+            canConfigurePrices: true,
+            canApproveExpenses: true,
+            maxDiscountLimit: 500,
+          };
+          break;
+        case 'dealer':
+          baseSettings.roleSettings = {
+            stationAccess: [],
+            reportAccess: ['sales', 'inventory', 'financial'],
+            canManageUsers: true,
+            canConfigurePrices: true,
+            canApproveExpenses: true,
+            maxDiscountLimit: 200,
+          };
+          break;
+        case 'station_manager':
+          baseSettings.roleSettings = {
+            stationAccess: [],
+            reportAccess: ['sales', 'inventory'],
+            canManageUsers: false,
+            canConfigurePrices: false,
+            canApproveExpenses: true,
+            maxDiscountLimit: 100,
+          };
+          break;
+        case 'attendant':
+          baseSettings.roleSettings = {
+            stationAccess: [],
+            reportAccess: ['sales'],
+            canManageUsers: false,
+            canConfigurePrices: false,
+            canApproveExpenses: false,
+            maxDiscountLimit: 50,
+          };
+          break;
+      }
+    }
+
+    return baseSettings;
   };
 
   const handleSaveSettings = async (section: string) => {
     try {
       setSaving(true);
       
-      localStorage.setItem('mobile_settings', JSON.stringify(settings));
+      // Save to local storage
+      localStorage.setItem('pumpguard_user_settings', JSON.stringify(settings));
       
+      // If profile section, update via API
       if (section === 'profile') {
         const result = await authAPI.updateUserProfile({
           full_name: `${settings.profile.firstName} ${settings.profile.lastName}`.trim(),
@@ -503,6 +400,7 @@ export default function MobileSettings() {
           throw new Error(result.error);
         }
         
+        // Update auth context
         updateUserProfile({
           full_name: `${settings.profile.firstName} ${settings.profile.lastName}`.trim(),
           email: settings.profile.email,
@@ -512,7 +410,7 @@ export default function MobileSettings() {
       
       toast({
         title: "Settings Updated",
-        description: `${section} settings have been saved.`,
+        description: `${section.charAt(0).toUpperCase() + section.slice(1)} settings have been saved successfully.`,
       });
       
     } catch (error: any) {
@@ -536,18 +434,27 @@ export default function MobileSettings() {
       hasSpecialChar: /[!@#$%^&*(),.?":{}|<>]/.test(password),
     };
 
+    // Calculate score
     if (requirements.minLength) score++;
     if (requirements.hasUpperCase) score++;
     if (requirements.hasLowerCase) score++;
     if (requirements.hasNumbers) score++;
     if (requirements.hasSpecialChar) score++;
 
+    // Determine message
     let message = '';
     if (score === 0) message = 'Very weak';
     else if (score <= 2) message = 'Weak';
     else if (score <= 3) message = 'Medium';
     else if (score === 4) message = 'Strong';
     else message = 'Very strong';
+
+    // Check for common passwords
+    const commonPasswords = ['password', '123456', '12345678', 'admin123', 'qwerty'];
+    if (commonPasswords.includes(password.toLowerCase())) {
+      score = 0;
+      message = 'Very weak (common password)';
+    }
 
     return { score, message, requirements };
   };
@@ -561,6 +468,7 @@ export default function MobileSettings() {
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Validate inputs
     if (!passwordForm.currentPassword) {
       toast({
         title: "Error",
@@ -588,9 +496,28 @@ export default function MobileSettings() {
       return;
     }
 
+    if (passwordForm.newPassword === passwordForm.currentPassword) {
+      toast({
+        title: "Error",
+        description: "New password must be different from current password",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (passwordStrength.score < 3) {
+      toast({
+        title: "Weak Password",
+        description: "Please choose a stronger password. Password must be at least medium strength.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       setSaving(true);
       
+      // Use the real auth API
       const result = await authAPI.changePassword(
         passwordForm.currentPassword,
         passwordForm.newPassword
@@ -602,12 +529,14 @@ export default function MobileSettings() {
           description: "Your password has been changed successfully.",
         });
         
+        // Clear form
         setPasswordForm({ 
           currentPassword: '', 
           newPassword: '', 
           confirmPassword: '' 
         });
         
+        // Update last password change timestamp
         setSettings(prev => ({
           ...prev,
           security: {
@@ -616,6 +545,11 @@ export default function MobileSettings() {
           }
         }));
         
+        // Show success message
+        toast({
+          title: "Success",
+          description: "Password changed successfully!",
+        });
       } else {
         throw new Error(result.error || "Failed to change password");
       }
@@ -634,6 +568,9 @@ export default function MobileSettings() {
     try {
       const newTwoFactorStatus = !settings.security.twoFactorEnabled;
       
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       setSettings(prev => ({
         ...prev,
         security: {
@@ -645,8 +582,8 @@ export default function MobileSettings() {
       toast({
         title: newTwoFactorStatus ? "2FA Enabled" : "2FA Disabled",
         description: newTwoFactorStatus 
-          ? "Two-factor authentication has been enabled."
-          : "Two-factor authentication has been disabled.",
+          ? "Two-factor authentication has been enabled for your account."
+          : "Two-factor authentication has been disabled for your account.",
       });
     } catch (error: any) {
       toast({
@@ -659,6 +596,7 @@ export default function MobileSettings() {
 
   const handleDataExport = async () => {
     try {
+      // Create export data
       const exportData = {
         settings,
         profile: {
@@ -669,13 +607,14 @@ export default function MobileSettings() {
         exportDate: new Date().toISOString(),
       };
       
+      // Create and download the export file
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { 
         type: 'application/json' 
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `mobile-settings-${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `pumpguard-settings-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -683,7 +622,7 @@ export default function MobileSettings() {
 
       toast({
         title: "Data Exported",
-        description: "Your settings have been exported.",
+        description: "Your settings have been exported successfully.",
       });
     } catch (error: any) {
       toast({
@@ -694,19 +633,61 @@ export default function MobileSettings() {
     }
   };
 
+  const handleSettingsImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedSettings = JSON.parse(e.target?.result as string);
+        setSettings(importedSettings.settings || importedSettings);
+        toast({
+          title: "Settings Imported",
+          description: "Your settings have been imported successfully.",
+        });
+      } catch (error) {
+        toast({
+          title: "Import Failed",
+          description: "Invalid settings file format.",
+          variant: "destructive",
+        });
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleResetSettings = (section: string) => {
+    if (confirm(`Reset all ${section} settings to default?`)) {
+      const defaultSettings = getDefaultSettings();
+      setSettings(prev => ({
+        ...prev,
+        [section]: defaultSettings[section as keyof UserSettings]
+      }));
+      
+      toast({
+        title: "Settings Reset",
+        description: `${section} settings have been reset to default.`,
+      });
+    }
+  };
+
   const handleAccountDelete = async () => {
-    if (!confirm("Are you sure you want to delete your account? This action cannot be undone.")) {
+    if (!confirm("Are you sure you want to delete your account? This action cannot be undone and all your data will be permanently lost.")) {
       return;
     }
 
     try {
-      // Simulate deletion
+      // This would call your API
+      // const response = await api.deleteAccount();
+      // For now, simulate deletion
       await new Promise(resolve => setTimeout(resolve, 1500));
       
       toast({
         title: "Account Deleted",
-        description: "Your account has been deleted.",
+        description: "Your account has been successfully deleted.",
       });
+      // Redirect to login or home page
       setTimeout(() => {
         window.location.href = '/auth/login';
       }, 2000);
@@ -726,15 +707,6 @@ export default function MobileSettings() {
     }));
   };
 
-  const handleLogout = async () => {
-    try {
-      await logout();
-      navigate('/auth/login');
-    } catch (error) {
-      console.error('Logout failed:', error);
-    }
-  };
-
   const getStrengthColor = (score: number) => {
     if (score === 0) return 'bg-red-500';
     if (score <= 2) return 'bg-orange-500';
@@ -743,193 +715,552 @@ export default function MobileSettings() {
     return 'bg-emerald-500';
   };
 
-  const renderProfileSection = () => (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
-              <User className="w-8 h-8 text-blue-600" />
+  const getStrengthTextColor = (score: number) => {
+    if (score === 0) return 'text-red-600';
+    if (score <= 2) return 'text-orange-600';
+    if (score <= 3) return 'text-yellow-600';
+    if (score === 4) return 'text-green-600';
+    return 'text-emerald-600';
+  };
+
+  const navigateToChangePassword = () => {
+    navigate('/auth/change-password');
+  };
+
+  // Mobile Components
+  const MobileHeader = () => (
+    <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-3">
+      <div className="flex items-center justify-between">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => navigate(-1)}
+          className="rounded-full"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </Button>
+        <div className="flex-1 text-center">
+          <h1 className="text-lg font-semibold text-gray-900">Settings</h1>
+          {user?.role && (
+            <Badge variant="secondary" className="text-xs">
+              {user.role.replace('_', ' ').toUpperCase()}
+            </Badge>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setShowMobileMenu(!showMobileMenu)}
+          className="rounded-full"
+        >
+          <Menu className="w-5 h-5" />
+        </Button>
+      </div>
+    </div>
+  );
+
+  const MobileTabNavigation = () => (
+    <div className="sticky top-[56px] z-40 bg-white border-b border-gray-200">
+      <div className="flex overflow-x-auto px-4 py-2 no-scrollbar">
+        {[
+          { id: 'profile', label: 'Profile', icon: User },
+          { id: 'notifications', label: 'Notifications', icon: Bell },
+          { id: 'security', label: 'Security', icon: Shield },
+          { id: 'preferences', label: 'Preferences', icon: Globe },
+          { id: 'advanced', label: 'Advanced', icon: Database },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <Button
+              key={tab.id}
+              variant="ghost"
+              size="sm"
+              className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 mx-1 rounded-lg ${
+                activeTab === tab.id
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-600'
+              }`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <Icon className="w-4 h-4" />
+              <span className="text-xs font-medium">{tab.label}</span>
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const MobileSideMenu = () => (
+    <div className={`fixed inset-0 z-50 transform transition-transform duration-300 ${
+      showMobileMenu ? 'translate-x-0' : 'translate-x-full'
+    }`}>
+      <div className="absolute inset-0 bg-black/50" onClick={() => setShowMobileMenu(false)} />
+      <div className="absolute right-0 top-0 bottom-0 w-64 bg-white shadow-xl">
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">Quick Menu</h2>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setShowMobileMenu(false)}
+              className="rounded-full"
+            >
+              <X className="w-5 h-5" />
+            </Button>
+          </div>
+        </div>
+        <div className="p-4 space-y-2">
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              navigate('/dashboard');
+              setShowMobileMenu(false);
+            }}
+          >
+            <Home className="w-4 h-4 mr-3" />
+            Dashboard
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              setActiveTab('security');
+              setShowMobileMenu(false);
+            }}
+          >
+            <Key className="w-4 h-4 mr-3" />
+            Change Password
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              handleDataExport();
+              setShowMobileMenu(false);
+            }}
+          >
+            <Download className="w-4 h-4 mr-3" />
+            Export Data
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              setActiveTab('advanced');
+              setShowMobileMenu(false);
+            }}
+          >
+            <Trash2 className="w-4 h-4 mr-3" />
+            Delete Account
+          </Button>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
+          <Button
+            variant="outline"
+            className="w-full text-red-600 border-red-200 hover:bg-red-50"
+            onClick={() => {
+              // Handle logout
+              setShowMobileMenu(false);
+            }}
+          >
+            <LogOut className="w-4 h-4 mr-2" />
+            Logout
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const MobileProfileCard = () => (
+    <Card className="mb-4 border-0 shadow-sm">
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="text-base">Profile Information</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="firstName" className="text-xs">First Name</Label>
+            <Input
+              id="firstName"
+              value={settings.profile.firstName}
+              onChange={(e) => updateSettings('profile', { firstName: e.target.value })}
+              className="h-9 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="lastName" className="text-xs">Last Name</Label>
+            <Input
+              id="lastName"
+              value={settings.profile.lastName}
+              onChange={(e) => updateSettings('profile', { lastName: e.target.value })}
+              className="h-9 text-sm"
+            />
+          </div>
+        </div>
+        
+        <div className="space-y-1">
+          <Label htmlFor="email" className="text-xs flex items-center gap-1">
+            <Mail className="w-3 h-3" />
+            Email Address
+          </Label>
+          <Input
+            id="email"
+            type="email"
+            value={settings.profile.email}
+            onChange={(e) => updateSettings('profile', { email: e.target.value })}
+            className="h-9 text-sm"
+          />
+        </div>
+        
+        <div className="space-y-1">
+          <Label htmlFor="phone" className="text-xs flex items-center gap-1">
+            <Phone className="w-3 h-3" />
+            Phone Number
+          </Label>
+          <Input
+            id="phone"
+            value={settings.profile.phone}
+            onChange={(e) => updateSettings('profile', { phone: e.target.value })}
+            className="h-9 text-sm"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="role" className="text-xs">Role</Label>
+            <Input
+              id="role"
+              value={user?.role ? user.role.replace('_', ' ').toUpperCase() : ''}
+              disabled
+              className="h-9 text-sm bg-gray-50"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="station" className="text-xs flex items-center gap-1">
+              <Building2 className="w-3 h-3" />
+              Station
+            </Label>
+            <Input
+              id="station"
+              value={user?.station_name || user?.station_id || 'Multiple Stations'}
+              disabled
+              className="h-9 text-sm bg-gray-50"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <Button 
+            onClick={() => handleSaveSettings('profile')}
+            disabled={saving}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 h-9 text-sm"
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+          <Button 
+            type="button"
+            variant="outline"
+            onClick={() => handleResetSettings('profile')}
+            className="h-9 text-sm"
+          >
+            <RefreshCw className="w-3 h-3 mr-1" />
+            Reset
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const MobileNotificationsCard = () => (
+    <Card className="mb-4 border-0 shadow-sm">
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="text-base">Notification Preferences</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 space-y-3">
+        <div className="space-y-3">
+          <h4 className="font-medium text-sm text-gray-900">Business Alerts</h4>
+          {[
+            { key: 'salesAlerts', title: "Sales Alerts", description: "High-value transactions" },
+            { key: 'lowStockWarnings', title: "Low Stock", description: "Fuel stock alerts" },
+            { key: 'priceChanges', title: "Price Changes", description: "Price updates" },
+            { key: 'shiftUpdates', title: "Shift Updates", description: "Shift changes" },
+          ].map((setting) => (
+            <div key={setting.key} className="flex items-center justify-between py-2">
+              <div className="space-y-0.5 flex-1">
+                <Label htmlFor={setting.key} className="font-medium text-sm">
+                  {setting.title}
+                </Label>
+                <p className="text-xs text-gray-600">{setting.description}</p>
+              </div>
+              <Switch
+                id={setting.key}
+                checked={settings.notifications[setting.key as keyof typeof settings.notifications] as boolean}
+                onCheckedChange={(checked) => 
+                  updateSettings('notifications', { [setting.key]: checked })
+                }
+                className="scale-90"
+              />
             </div>
-            <div>
-              <h3 className="font-bold text-lg">
-                {settings.profile.firstName} {settings.profile.lastName}
-              </h3>
-              <p className="text-sm text-gray-600">{user?.role?.replace('_', ' ').toUpperCase()}</p>
-              {user?.station_name && (
-                <p className="text-xs text-gray-500 flex items-center gap-1 mt-1">
-                  <Building2 className="w-3 h-3" />
-                  {user.station_name}
-                </p>
-              )}
+          ))}
+        </div>
+
+        <Separator />
+
+        <div className="space-y-3">
+          <h4 className="font-medium text-sm text-gray-900">Delivery Methods</h4>
+          {[
+            { key: 'emailNotifications', title: "Email", description: "Receive via email" },
+            { key: 'smsNotifications', title: "SMS", description: "Receive via SMS" },
+            { key: 'pushNotifications', title: "Push", description: "Push notifications" },
+          ].map((setting) => (
+            <div key={setting.key} className="flex items-center justify-between py-2">
+              <div className="space-y-0.5 flex-1">
+                <Label htmlFor={setting.key} className="font-medium text-sm">
+                  {setting.title}
+                </Label>
+                <p className="text-xs text-gray-600">{setting.description}</p>
+              </div>
+              <Switch
+                id={setting.key}
+                checked={settings.notifications[setting.key as keyof typeof settings.notifications] as boolean}
+                onCheckedChange={(checked) => 
+                  updateSettings('notifications', { [setting.key]: checked })
+                }
+                className="scale-90"
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <Button 
+            onClick={() => handleSaveSettings('notifications')}
+            disabled={saving}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 h-9 text-sm"
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+          <Button 
+            type="button"
+            variant="outline"
+            onClick={() => handleResetSettings('notifications')}
+            className="h-9 text-sm"
+          >
+            <RefreshCw className="w-3 h-3 mr-1" />
+            Reset
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const MobileSecurityCard = () => (
+    <Card className="mb-4 border-0 shadow-sm">
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="text-base">Password & Security</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 space-y-4">
+        <form onSubmit={handlePasswordChange} className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="currentPassword" className="text-xs">Current Password</Label>
+            <div className="relative">
+              <Input
+                id="currentPassword"
+                type={showCurrentPassword ? "text" : "password"}
+                value={passwordForm.currentPassword}
+                onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+                placeholder="Enter current password"
+                className="h-9 text-sm pr-10"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+              >
+                {showCurrentPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </Button>
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs text-gray-500">Email</Label>
-              <p className="font-medium">{settings.profile.email}</p>
+          <div className="space-y-1">
+            <Label htmlFor="newPassword" className="text-xs">New Password</Label>
+            <div className="relative">
+              <Input
+                id="newPassword"
+                type={showNewPassword ? "text" : "password"}
+                value={passwordForm.newPassword}
+                onChange={handleNewPasswordChange}
+                placeholder="Enter new password"
+                className="h-9 text-sm pr-10"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowNewPassword(!showNewPassword)}
+              >
+                {showNewPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </Button>
             </div>
-            {settings.profile.phone && (
-              <div>
-                <Label className="text-xs text-gray-500">Phone</Label>
-                <p className="font-medium">{settings.profile.phone}</p>
+            
+            {passwordForm.newPassword && (
+              <div className="space-y-1 mt-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-gray-600">Strength:</span>
+                  <span className={`font-semibold ${getStrengthTextColor(passwordStrength.score)}`}>
+                    {passwordStrength.message}
+                  </span>
+                </div>
+                <div className="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-300 ${getStrengthColor(passwordStrength.score)}`}
+                    style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+                  />
+                </div>
               </div>
             )}
           </div>
-        </CardContent>
-      </Card>
 
-      <Button 
-        onClick={() => setShowProfileSheet(true)}
-        className="w-full"
-      >
-        <Edit className="w-4 h-4 mr-2" />
-        Edit Profile
-      </Button>
-    </div>
-  );
-
-  const renderNotificationsSection = () => (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <MobileSwitchItem
-            icon={Bell}
-            title="Sales Alerts"
-            description="Get notified for high-value transactions"
-            checked={settings.notifications.salesAlerts}
-            onChange={(checked) => updateSettings('notifications', { salesAlerts: checked })}
-          />
-          
-          <MobileSwitchItem
-            icon={AlertTriangle}
-            title="Low Stock Warnings"
-            description="Alert when fuel stock is running low"
-            checked={settings.notifications.lowStockWarnings}
-            onChange={(checked) => updateSettings('notifications', { lowStockWarnings: checked })}
-            iconColor="orange"
-          />
-          
-          <MobileSwitchItem
-            icon={Bell}
-            title="Price Changes"
-            description="Notify when fuel prices are updated"
-            checked={settings.notifications.priceChanges}
-            onChange={(checked) => updateSettings('notifications', { priceChanges: checked })}
-            iconColor="green"
-          />
-          
-          <MobileSwitchItem
-            icon={Clock}
-            title="Shift Updates"
-            description="Notifications about shift changes"
-            checked={settings.notifications.shiftUpdates}
-            onChange={(checked) => updateSettings('notifications', { shiftUpdates: checked })}
-          />
-          
-          <MobileSwitchItem
-            icon={Bell}
-            title="Push Notifications"
-            description="Receive notifications on this device"
-            checked={settings.notifications.pushNotifications}
-            onChange={(checked) => updateSettings('notifications', { pushNotifications: checked })}
-          />
-        </CardContent>
-      </Card>
-
-      <Button 
-        onClick={() => handleSaveSettings('notifications')}
-        disabled={saving}
-        className="w-full bg-blue-600 hover:bg-blue-700"
-      >
-        <Save className="w-4 h-4 mr-2" />
-        {saving ? 'Saving...' : 'Save Preferences'}
-      </Button>
-    </div>
-  );
-
-  const renderSecuritySection = () => (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <MobileSwitchItem
-            icon={Shield}
-            title="Two-Factor Authentication"
-            description="Add an extra layer of security"
-            checked={settings.security.twoFactorEnabled}
-            onChange={handleTwoFactorToggle}
-            iconColor="green"
-          />
-          
-          <MobileSwitchItem
-            icon={ShieldCheck}
-            title="Login Alerts"
-            description="Get notified of new sign-ins"
-            checked={settings.security.loginAlerts}
-            onChange={(checked) => updateSettings('security', { loginAlerts: checked })}
-          />
-
-          <div className="space-y-2">
-            <Label>Session Timeout</Label>
-            <Select
-              value={settings.security.sessionTimeout.toString()}
-              onValueChange={(value) => 
-                updateSettings('security', { sessionTimeout: parseInt(value) })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="15">15 minutes</SelectItem>
-                <SelectItem value="30">30 minutes</SelectItem>
-                <SelectItem value="60">60 minutes</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Last Password Change</p>
-                <p className="text-xs text-gray-600">
-                  {settings.security.lastPasswordChange 
-                    ? new Date(settings.security.lastPasswordChange).toLocaleDateString()
-                    : 'Never'
-                  }
-                </p>
-              </div>
-              <CheckCircle2 className="w-5 h-5 text-green-600" />
+          <div className="space-y-1">
+            <Label htmlFor="confirmPassword" className="text-xs">Confirm Password</Label>
+            <div className="relative">
+              <Input
+                id="confirmPassword"
+                type={showConfirmPassword ? "text" : "password"}
+                value={passwordForm.confirmPassword}
+                onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                placeholder="Confirm new password"
+                className="h-9 text-sm pr-10"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              >
+                {showConfirmPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </Button>
             </div>
+            {passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword && (
+              <p className="text-red-500 text-xs">Passwords do not match</p>
+            )}
           </div>
-        </CardContent>
-      </Card>
 
-      <Button 
-        onClick={() => setShowSecuritySheet(true)}
-        className="w-full"
-        variant="outline"
-      >
-        <Key className="w-4 h-4 mr-2" />
-        Change Password
-      </Button>
-    </div>
+          <Button 
+            type="submit"
+            disabled={saving}
+            className="w-full bg-blue-600 hover:bg-blue-700 h-9 text-sm"
+          >
+            <Key className="w-3 h-3 mr-1" />
+            {saving ? 'Updating...' : 'Update Password'}
+          </Button>
+        </form>
+
+        <div className="pt-3">
+          <Button 
+            onClick={navigateToChangePassword}
+            variant="outline"
+            className="w-full justify-between h-9 text-sm"
+          >
+            <div className="flex items-center gap-2">
+              <Shield className="w-3 h-3" />
+              <span>Enhanced Password</span>
+            </div>
+            <ChevronRight className="w-3 h-3" />
+          </Button>
+          <p className="text-xs text-gray-500 mt-2 text-center">
+            Forgot password?{' '}
+            <button 
+              onClick={() => navigate('/auth/forgot-password')}
+              className="text-blue-600 hover:text-blue-800"
+            >
+              Reset here
+            </button>
+          </p>
+        </div>
+
+        <Separator />
+
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-medium text-sm">Last Password Change</p>
+            <p className="text-xs text-gray-600">
+              {settings.security.lastPasswordChange 
+                ? new Date(settings.security.lastPasswordChange).toLocaleDateString()
+                : 'Never'
+              }
+            </p>
+          </div>
+          <CheckCircle2 className="w-4 h-4 text-green-600" />
+        </div>
+
+        <div className="flex items-center justify-between pt-3">
+          <div>
+            <p className="font-medium text-sm">Two-Factor Auth</p>
+            <p className="text-xs text-gray-600">Add extra security layer</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant={settings.security.twoFactorEnabled ? "default" : "secondary"} className="text-xs">
+              {settings.security.twoFactorEnabled ? "On" : "Off"}
+            </Badge>
+            <Switch
+              checked={settings.security.twoFactorEnabled}
+              onCheckedChange={handleTwoFactorToggle}
+              className="scale-90"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <Button 
+            onClick={() => handleSaveSettings('security')}
+            disabled={saving}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 h-9 text-sm"
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+          <Button 
+            type="button"
+            variant="outline"
+            onClick={() => handleResetSettings('security')}
+            className="h-9 text-sm"
+          >
+            <RefreshCw className="w-3 h-3 mr-1" />
+            Reset
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 
-  const renderPreferencesSection = () => (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <div className="space-y-2">
-            <Label>Theme</Label>
+  const MobilePreferencesCard = () => (
+    <Card className="mb-4 border-0 shadow-sm">
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="text-base">Appearance & Preferences</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 space-y-4">
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="theme" className="text-xs flex items-center gap-1">
+              <Palette className="w-3 h-3" />
+              Theme
+            </Label>
             <Select
               value={settings.preferences.theme}
               onValueChange={(value: 'light' | 'dark' | 'system') => 
                 updateSettings('preferences', { theme: value })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger className="h-9 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -940,20 +1271,23 @@ export default function MobileSettings() {
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>Language</Label>
+          <div className="space-y-1">
+            <Label htmlFor="language" className="text-xs flex items-center gap-1">
+              <Languages className="w-3 h-3" />
+              Language
+            </Label>
             <Select
               value={settings.preferences.language}
               onValueChange={(value) => 
                 updateSettings('preferences', { language: value })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger className="h-9 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {languages.map((lang) => (
-                  <SelectItem key={lang.value} value={lang.value}>
+                  <SelectItem key={lang.value} value={lang.value} className="text-sm">
                     {lang.label}
                   </SelectItem>
                 ))}
@@ -961,20 +1295,20 @@ export default function MobileSettings() {
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>Timezone</Label>
+          <div className="space-y-1">
+            <Label htmlFor="timezone" className="text-xs">Timezone</Label>
             <Select
               value={settings.preferences.timezone}
               onValueChange={(value) => 
                 updateSettings('preferences', { timezone: value })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger className="h-9 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {timezones.map((tz) => (
-                  <SelectItem key={tz} value={tz}>
+                  <SelectItem key={tz} value={tz} className="text-sm">
                     {tz}
                   </SelectItem>
                 ))}
@@ -982,152 +1316,230 @@ export default function MobileSettings() {
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>Currency</Label>
+          <div className="space-y-1">
+            <Label htmlFor="currency" className="text-xs">Currency</Label>
             <Select
               value={settings.preferences.currency}
               onValueChange={(value) => 
                 updateSettings('preferences', { currency: value })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger className="h-9 text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {currencies.map((currency) => (
-                  <SelectItem key={currency.value} value={currency.value}>
+                  <SelectItem key={currency.value} value={currency.value} className="text-sm">
                     {currency.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+        </div>
 
-          <Separator />
-
-          <MobileSwitchItem
-            icon={settings.preferences.offlineMode ? CloudOff : Cloud}
-            title="Offline Mode"
-            description="Work without internet connection"
-            checked={settings.preferences.offlineMode}
-            onChange={(checked) => updateSettings('preferences', { offlineMode: checked })}
-            iconColor={settings.preferences.offlineMode ? "orange" : "blue"}
-          />
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm flex items-center gap-1">
+                {settings.preferences.offlineMode ? <WifiOff className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
+                Offline Mode
+              </p>
+              <p className="text-xs text-gray-600">Work without internet</p>
+            </div>
+            <Switch
+              checked={settings.preferences.offlineMode}
+              onCheckedChange={(checked) => 
+                updateSettings('preferences', { offlineMode: checked })
+              }
+              className="scale-90"
+            />
+          </div>
           
-          <MobileSwitchItem
-            icon={Cloud}
-            title="Auto-Sync"
-            description="Automatically sync data when online"
-            checked={settings.preferences.autoSync}
-            onChange={(checked) => updateSettings('preferences', { autoSync: checked })}
-            iconColor="green"
-          />
-        </CardContent>
-      </Card>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">Auto-Sync</p>
+              <p className="text-xs text-gray-600">Sync when online</p>
+            </div>
+            <Switch
+              checked={settings.preferences.autoSync}
+              onCheckedChange={(checked) => 
+                updateSettings('preferences', { autoSync: checked })
+              }
+              className="scale-90"
+            />
+          </div>
+        </div>
 
-      <Button 
-        onClick={() => handleSaveSettings('preferences')}
-        disabled={saving}
-        className="w-full bg-blue-600 hover:bg-blue-700"
-      >
-        <Save className="w-4 h-4 mr-2" />
-        {saving ? 'Saving...' : 'Save Preferences'}
-      </Button>
-    </div>
+        <div className="flex gap-2 pt-2">
+          <Button 
+            onClick={() => handleSaveSettings('preferences')}
+            disabled={saving}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 h-9 text-sm"
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+          <Button 
+            type="button"
+            variant="outline"
+            onClick={() => handleResetSettings('preferences')}
+            className="h-9 text-sm"
+          >
+            <RefreshCw className="w-3 h-3 mr-1" />
+            Reset
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 
-  const renderAdvancedSection = () => (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <MobileSettingItem
-            icon={Download}
-            title="Export Data"
-            value="Download your settings and data"
-            onClick={handleDataExport}
-          />
-          
-          <MobileSettingItem
-            icon={RefreshCw}
-            title="Clear Cache"
-            value="Remove temporary application data"
-            onClick={() => {
-              toast({
-                title: "Cache Cleared",
-                description: "Temporary data has been removed.",
-              });
-            }}
-          />
-          
-          <MobileSettingItem
-            icon={Info}
-            title="About PumpGuard"
-            value="Version 2.1.0"
-            onClick={() => setShowAboutSheet(true)}
-          />
-          
-          <MobileSettingItem
-            icon={HelpCircle}
-            title="Help & Support"
-            onClick={() => window.open('/help', '_blank')}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-4 space-y-4">
-          <div className="p-3 bg-red-50 rounded-lg border border-red-200">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
-              <div className="space-y-2">
-                <p className="font-medium text-red-800">Danger Zone</p>
-                <p className="text-sm text-red-600">
-                  These actions are permanent and cannot be undone.
-                </p>
+  const MobileAdvancedCard = () => (
+    <div className="space-y-4 mb-20">
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="px-4 py-3">
+          <CardTitle className="text-base">Data Management</CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pt-0 space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-2">
+              <div>
+                <p className="font-medium text-sm">Export Data</p>
+                <p className="text-xs text-gray-600">Download all your data</p>
               </div>
+              <Button variant="outline" size="sm" onClick={handleDataExport} className="h-8 text-xs">
+                <Download className="w-3 h-3 mr-1" />
+                Export
+              </Button>
+            </div>
+
+            <div className="relative">
+              <div className="flex items-center justify-between py-2">
+                <div>
+                  <p className="font-medium text-sm">Import Settings</p>
+                  <p className="text-xs text-gray-600">Upload settings file</p>
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => document.getElementById('mobile-settings-import')?.click()}
+                  className="h-8 text-xs"
+                >
+                  <Upload className="w-3 h-3 mr-1" />
+                  Import
+                </Button>
+              </div>
+              <input
+                id="mobile-settings-import"
+                type="file"
+                accept=".json"
+                onChange={handleSettingsImport}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
             </div>
           </div>
 
-          <MobileSettingItem
-            icon={Trash2}
-            title="Delete Account"
-            isDanger={true}
-            onClick={handleAccountDelete}
-          />
-          
-          <MobileSettingItem
-            icon={LogOut}
-            title="Logout"
-            isDanger={true}
-            onClick={handleLogout}
-          />
+          <div className="space-y-1">
+            <Label className="text-xs">Storage Usage</Label>
+            <div className="w-full bg-gray-200 rounded-full h-1.5">
+              <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: '45%' }}></div>
+            </div>
+            <p className="text-xs text-gray-600">2.1 GB of 5 GB used</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="px-4 py-3">
+          <CardTitle className="text-base">Account Actions</CardTitle>
+        </CardHeader>
+        <CardContent className="px-4 pt-0 space-y-4">
+          <div className="p-3 border border-red-200 rounded-lg bg-red-50">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+              <div className="space-y-2">
+                <p className="font-medium text-sm text-red-800">Delete Account</p>
+                <p className="text-xs text-red-600">
+                  Permanently delete your account. Cannot be undone.
+                </p>
+                <Button 
+                  variant="destructive" 
+                  size="sm"
+                  onClick={handleAccountDelete}
+                  className="h-8 text-xs"
+                >
+                  <Trash2 className="w-3 h-3 mr-1" />
+                  Delete Account
+                </Button>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 
-  const renderContent = () => {
-    switch (activeSection) {
-      case 'profile':
-        return renderProfileSection();
-      case 'notifications':
-        return renderNotificationsSection();
-      case 'security':
-        return renderSecuritySection();
-      case 'preferences':
-        return renderPreferencesSection();
-      case 'advanced':
-        return renderAdvancedSection();
-      default:
-        return renderProfileSection();
-    }
-  };
+  const MobileRolePermissionsCard = () => (
+    <Card className="mb-4 border-0 shadow-sm">
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="text-base">Role Permissions</CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <div className="text-sm font-bold text-black">User Management</div>
+            <Badge variant={settings.roleSettings.canManageUsers ? "default" : "secondary"} className="mt-1 text-xs">
+              {settings.roleSettings.canManageUsers ? "Allowed" : "Restricted"}
+            </Badge>
+          </div>
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <div className="text-sm font-bold text-black">Price Config</div>
+            <Badge variant={settings.roleSettings.canConfigurePrices ? "default" : "secondary"} className="mt-1 text-xs">
+              {settings.roleSettings.canConfigurePrices ? "Allowed" : "Restricted"}
+            </Badge>
+          </div>
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <div className="text-sm font-bold text-black">Expense Approve</div>
+            <Badge variant={settings.roleSettings.canApproveExpenses ? "default" : "secondary"} className="mt-1 text-xs">
+              {settings.roleSettings.canApproveExpenses ? "Allowed" : "Restricted"}
+            </Badge>
+          </div>
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <div className="text-sm font-bold text-black">Max Discount</div>
+            <div className="text-xs font-semibold text-green-600 mt-1">
+              ₵{settings.roleSettings.maxDiscountLimit}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2 pt-2">
+          <Label className="text-xs">Station Access</Label>
+          <p className="text-sm text-gray-600">
+            {settings.roleSettings.stationAccess.includes('all') 
+              ? 'All Stations' 
+              : `${settings.roleSettings.stationAccess.length} station(s)`
+            }
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs">Report Access</Label>
+          <p className="text-sm text-gray-600">
+            {settings.roleSettings.reportAccess.includes('all')
+              ? 'All Reports'
+              : settings.roleSettings.reportAccess.join(', ')
+            }
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 p-4">
-        <MobileStatusBar isOnline={isOnline} batteryLevel={batteryLevel} isCharging={isCharging} />
-        <div className="flex items-center justify-center h-64">
+      <div className="min-h-screen bg-gray-50">
+        <MobileHeader />
+        <div className="flex items-center justify-center min-h-[400px]">
           <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
         </div>
       </div>
@@ -1135,294 +1547,68 @@ export default function MobileSettings() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-16 safe-area-padding">
-      {/* Status Bar */}
-      <MobileStatusBar isOnline={isOnline} batteryLevel={batteryLevel} isCharging={isCharging} />
-
-      {/* Header */}
-      <div className="px-4 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Settings</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant="secondary" className="text-xs">
-                <Shield className="w-3 h-3 mr-1" />
-                {user?.role?.replace('_', ' ').toUpperCase()}
-              </Badge>
-              <span className="text-xs text-gray-600">Manage your preferences</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Pull to refresh */}
-        <PullToRefresh onRefresh={refreshAllData} refreshing={refreshing} />
-
-        {/* Navigation */}
-        <div className="flex items-center border-b border-gray-200 mb-4 overflow-x-auto">
-          {[
-            { id: 'profile', label: 'Profile', icon: User },
-            { id: 'notifications', label: 'Notifications', icon: Bell },
-            { id: 'security', label: 'Security', icon: Shield },
-            { id: 'preferences', label: 'Preferences', icon: Globe },
-            { id: 'advanced', label: 'Advanced', icon: Database },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeSection === tab.id;
-            
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveSection(tab.id as any)}
-                className={`flex-shrink-0 px-4 py-3 text-sm font-medium border-b-2 ${
-                  isActive
-                    ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <div className="flex flex-col items-center">
-                  <Icon className="w-5 h-5 mb-1" />
-                  <span>{tab.label}</span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Content */}
-        {renderContent()}
+    <div className="min-h-screen bg-gray-50">
+      <MobileHeader />
+      <MobileSideMenu />
+      <MobileTabNavigation />
+      
+      <div className="p-4">
+        {activeTab === 'profile' && (
+          <>
+            <MobileProfileCard />
+            <MobileRolePermissionsCard />
+          </>
+        )}
+        
+        {activeTab === 'notifications' && <MobileNotificationsCard />}
+        
+        {activeTab === 'security' && <MobileSecurityCard />}
+        
+        {activeTab === 'preferences' && <MobilePreferencesCard />}
+        
+        {activeTab === 'advanced' && <MobileAdvancedCard />}
       </div>
 
-      {/* Profile Edit Sheet */}
-      <Sheet open={showProfileSheet} onOpenChange={setShowProfileSheet}>
-        <SheetContent side="bottom" className="rounded-t-2xl">
-          <SheetHeader>
-            <SheetTitle>Edit Profile</SheetTitle>
-          </SheetHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>First Name</Label>
-              <Input
-                value={settings.profile.firstName}
-                onChange={(e) => updateSettings('profile', { firstName: e.target.value })}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Last Name</Label>
-              <Input
-                value={settings.profile.lastName}
-                onChange={(e) => updateSettings('profile', { lastName: e.target.value })}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Email</Label>
-              <Input
-                type="email"
-                value={settings.profile.email}
-                onChange={(e) => updateSettings('profile', { email: e.target.value })}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Phone</Label>
-              <Input
-                value={settings.profile.phone}
-                onChange={(e) => updateSettings('profile', { phone: e.target.value })}
-              />
-            </div>
-            
-            <Button 
-              onClick={() => {
-                handleSaveSettings('profile');
-                setShowProfileSheet(false);
-              }}
-              disabled={saving}
-              className="w-full bg-blue-600 hover:bg-blue-700"
-            >
-              <Save className="w-4 h-4 mr-2" />
-              {saving ? 'Saving...' : 'Save Changes'}
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* Security Sheet */}
-      <Sheet open={showSecuritySheet} onOpenChange={setShowSecuritySheet}>
-        <SheetContent side="bottom" className="rounded-t-2xl">
-          <SheetHeader>
-            <SheetTitle>Change Password</SheetTitle>
-          </SheetHeader>
-          <form onSubmit={handlePasswordChange} className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label>Current Password</Label>
-              <div className="relative">
-                <Input
-                  type={showCurrentPassword ? "text" : "password"}
-                  value={passwordForm.currentPassword}
-                  onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
-                  placeholder="Enter current password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3"
-                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                >
-                  {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>New Password</Label>
-              <div className="relative">
-                <Input
-                  type={showNewPassword ? "text" : "password"}
-                  value={passwordForm.newPassword}
-                  onChange={handleNewPasswordChange}
-                  placeholder="Enter new password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3"
-                  onClick={() => setShowNewPassword(!showNewPassword)}
-                >
-                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </Button>
-              </div>
-              
-              {passwordForm.newPassword && (
-                <div className="space-y-2 mt-3">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-600">Strength:</span>
-                    <span className={`font-semibold ${
-                      passwordStrength.score === 0 ? 'text-red-600' :
-                      passwordStrength.score <= 2 ? 'text-orange-600' :
-                      passwordStrength.score <= 3 ? 'text-yellow-600' :
-                      passwordStrength.score === 4 ? 'text-green-600' :
-                      'text-emerald-600'
-                    }`}>
-                      {passwordStrength.message}
-                    </span>
-                  </div>
-                  <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className={`h-full transition-all duration-300 ${getStrengthColor(passwordStrength.score)}`}
-                      style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label>Confirm New Password</Label>
-              <div className="relative">
-                <Input
-                  type={showConfirmPassword ? "text" : "password"}
-                  value={passwordForm.confirmPassword}
-                  onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                  placeholder="Confirm new password"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                >
-                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </Button>
-              </div>
-              {passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword && (
-                <p className="text-red-500 text-xs">Passwords do not match</p>
-              )}
-            </div>
-
-            <Button 
-              type="submit"
-              disabled={saving}
-              className="w-full bg-blue-600 hover:bg-blue-700"
-            >
-              <Key className="w-4 h-4 mr-2" />
-              {saving ? 'Updating...' : 'Update Password'}
-            </Button>
-          </form>
-        </SheetContent>
-      </Sheet>
-
-      {/* About Sheet */}
-      <Sheet open={showAboutSheet} onOpenChange={setShowAboutSheet}>
-        <SheetContent side="bottom" className="rounded-t-2xl">
-          <SheetHeader>
-            <SheetTitle>About PumpGuard</SheetTitle>
-          </SheetHeader>
-          <div className="space-y-4 py-4">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Smartphone className="w-8 h-8 text-white" />
-              </div>
-              <h3 className="text-lg font-bold">PumpGuard Mobile</h3>
-              <p className="text-gray-600">Version 2.1.0</p>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Build Date</span>
-                <span className="font-medium">{new Date().toLocaleDateString()}</span>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Device</span>
-                <span className="font-medium">{navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}</span>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Platform</span>
-                <span className="font-medium">
-                  {navigator.userAgent.includes('iPhone') ? 'iOS' : 
-                   navigator.userAgent.includes('Android') ? 'Android' : 
-                   'Web'}
-                </span>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Storage Used</span>
-                <span className="font-medium">2.1 GB / 5 GB</span>
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="space-y-2">
-              <h4 className="font-medium">Support</h4>
-              <p className="text-sm text-gray-600">
-                Need help? Contact our support team at support@pumpguard.com
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="font-medium">Terms & Privacy</h4>
-              <p className="text-sm text-gray-600">
-                By using PumpGuard, you agree to our Terms of Service and Privacy Policy.
-              </p>
-            </div>
-
-            <Button 
-              variant="outline" 
-              className="w-full"
-              onClick={() => window.open('/help', '_blank')}
-            >
-              <HelpCircle className="w-4 h-4 mr-2" />
-              Help Center
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
+      {/* Bottom Navigation */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-around">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex flex-col items-center"
+            onClick={() => navigate('/dashboard')}
+          >
+            <Home className="w-5 h-5 text-gray-600" />
+            <span className="text-xs mt-1">Home</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex flex-col items-center text-blue-600"
+          >
+            <SettingsIcon className="w-5 h-5" />
+            <span className="text-xs mt-1">Settings</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex flex-col items-center"
+            onClick={() => setActiveTab('security')}
+          >
+            <Shield className="w-5 h-5 text-gray-600" />
+            <span className="text-xs mt-1">Security</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex flex-col items-center"
+            onClick={() => setActiveTab('advanced')}
+          >
+            <Database className="w-5 h-5 text-gray-600" />
+            <span className="text-xs mt-1">Advanced</span>
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
