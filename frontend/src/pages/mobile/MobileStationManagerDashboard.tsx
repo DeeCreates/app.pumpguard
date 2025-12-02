@@ -1,4 +1,3 @@
-// src/pages/mobile/MobileStationManagerDashboard.tsx
 import React, { useState, useEffect, lazy, Suspense, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "../../contexts/AuthContext";
@@ -6,7 +5,7 @@ import { usePrices } from "../../contexts/PriceContext";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +13,6 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogDescription,
-  DialogFooter,
 } from "../../components/ui/dialog";
 import {
   Tabs,
@@ -23,13 +21,6 @@ import {
   TabsTrigger,
 } from "../../components/ui/tabs";
 import { Skeleton } from "../../components/ui/skeleton";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "../../components/ui/sheet";
 import { toast } from "sonner";
 import {
   DollarSign,
@@ -66,35 +57,31 @@ import {
   Search,
   Filter,
   MoreHorizontal,
-  Menu,
-  Home,
-  Bell,
+  ChevronLeft,
   ChevronRight,
-  ChevronDown,
-  TrendingDown,
-  Zap,
-  Shield,
-  Cloud,
-  CloudOff,
-  History,
-  BarChart,
-  Wallet,
-  ShoppingCart,
-  ClipboardList,
-  CheckSquare,
+  Home,
+  Menu,
   X,
-  Maximize2,
-  Minimize2,
-  Smartphone,
+  LogOut,
+  Activity,
+  Shield,
+  Bell,
+  FileText,
+  AlertCircle,
+  Thermometer,
+  Droplets,
+  Zap,
   Battery,
-  BatteryCharging,
 } from "lucide-react";
 import { offlineSync } from "../../utils/offline-sync";
 
-// Lazy loaded components for mobile
-const LazyMobileBankDeposits = lazy(() => import('./MobileBankDeposits'));
+// Lazy loaded components
+const LazyIoTDashboard = lazy(() => import('../../components/temp/IoTDashboard'));
+const LazyShiftManagement = lazy(() => import('../../pages/operations/ShiftManagement'));
+const LazyPumpCalibration = lazy(() => import('../../pages/operations/PumpCalibration'));
+const LazyBankDeposits = lazy(() => import('../../pages/financial/BankDeposits'));
 
-// Types (simplified for mobile)
+// Types (keep same as before)
 interface DailyReport {
   total_sales: number;
   total_expenses: number;
@@ -124,7 +111,21 @@ interface Expense {
   type: string;
   status: 'pending' | 'approved' | 'rejected';
   created_by: string;
+  approved_by?: string;
   created_at: string;
+  updated_at: string;
+  receipt_url?: string;
+  notes?: string;
+}
+
+interface ExpenseStats {
+  total_expenses: number;
+  operational: number;
+  fixed: number;
+  staff: number;
+  maintenance: number;
+  other: number;
+  pending_approval: number;
 }
 
 interface Product {
@@ -140,7 +141,30 @@ interface Pump {
   number: string;
   fuel_type: string;
   status: 'active' | 'inactive' | 'maintenance';
+  manufacturer?: string;
+  model?: string;
+  serial_number?: string;
+  installation_date?: string;
+  last_maintenance_date?: string;
+  next_maintenance_date?: string;
   current_meter_reading: number;
+  total_dispensed: number;
+  created_at: string;
+  updated_at: string;
+  created_by?: string;
+}
+
+interface InventoryHistory {
+  id: string;
+  station_id: string;
+  product_id: string;
+  opening_stock: number;
+  closing_stock: number;
+  received: number;
+  stock_date: string;
+  recorded_by: string;
+  created_at: string;
+  products?: Product;
 }
 
 interface FuelStockCard {
@@ -149,6 +173,16 @@ interface FuelStockCard {
   current_stock: number;
   last_updated: string;
   unit: string;
+}
+
+interface Bank {
+  id: string;
+  name: string;
+  account_number: string;
+  branch: string;
+  station_id: string;
+  is_active: boolean;
+  created_at: string;
 }
 
 interface Station {
@@ -161,195 +195,253 @@ interface Station {
   };
 }
 
-// Mobile-specific types
-interface MobileDashboardConfig {
-  showQuickActions: boolean;
-  showOfflineWarning: boolean;
-  enableTouchGestures: boolean;
-  showBatterySaver: boolean;
+interface LoadingStates {
+  sales: boolean;
+  expenses: boolean;
+  inventory: boolean;
+  pumps: boolean;
+  prices: boolean;
+  banks: boolean;
+  dailyReport: boolean;
+  station: boolean;
 }
 
-// Utility functions for mobile
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('en-GH', {
-    style: 'currency',
-    currency: 'GHS',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
+interface DashboardConfig {
+  autoRefresh: boolean;
+  refreshInterval: number;
+  defaultView: string;
+  showNotifications: boolean;
+}
+
+// Utility functions (keep same as before)
+const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
 };
 
-const formatNumber = (num: number) => {
-  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-  return num.toString();
-};
-
-const getBatteryLevel = () => {
-  if ('getBattery' in navigator) {
-    return (navigator as any).getBattery().then((battery: any) => ({
-      level: battery.level * 100,
-      charging: battery.charging,
-    }));
+const exportToCSV = (data: any[], filename: string) => {
+  if (!data.length) {
+    toast.error('No data to export');
+    return;
   }
-  return Promise.resolve({ level: 100, charging: false });
+
+  try {
+    const headers = Object.keys(data[0]).join(',');
+    const csv = [headers, ...data.map(row => 
+      Object.values(row).map(value => 
+        typeof value === 'string' && value.includes(',') ? `"${value}"` : value
+      ).join(',')
+    )].join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${filename}-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    toast.success('Export completed successfully');
+  } catch (error) {
+    console.error('Export failed:', error);
+    toast.error('Failed to export data');
+  }
 };
 
-// Mobile-specific components
-const MobileStatusBar = ({ isOnline, pendingSync, batteryLevel, isCharging }: { 
-  isOnline: boolean; 
+const handleApiError = (error: any, operation: string) => {
+  console.error(`❌ ${operation} failed:`, error);
+  
+  if (error.code === 'PGRST301' || error.message?.includes('fetch')) {
+    toast.error('Network error. Please check your connection.');
+  } else if (error.code === '42501') {
+    toast.error('Permission denied. Please contact administrator.');
+  } else if (error.message?.includes('JWT')) {
+    toast.error('Session expired. Please login again.');
+  } else if (error.code === '23505') {
+    toast.error('Duplicate entry. This record already exists.');
+  } else if (error.code === '23503') {
+    toast.error('Reference error. Related record not found.');
+  } else {
+    toast.error(`${operation} failed: ${error.message || 'Unknown error'}`);
+  }
+};
+
+// Form validation functions (keep same as before)
+const validateSalesForm = (form: any, pumps: Pump[]): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.pump_id) errors.push('Pump selection is required');
+  if (!form.opening_meter) errors.push('Opening meter is required');
+  if (!form.closing_meter) errors.push('Closing meter is required');
+  
+  const opening = parseFloat(form.opening_meter);
+  const closing = parseFloat(form.closing_meter);
+  
+  if (isNaN(opening) || isNaN(closing)) {
+    errors.push('Please enter valid meter readings');
+    return errors;
+  }
+  
+  if (closing < opening) errors.push('Closing meter cannot be less than opening meter');
+  if (closing - opening > 10000) errors.push('Unrealistic volume detected');
+  
+  const selectedPump = pumps.find(p => p.id === form.pump_id);
+  if (selectedPump && opening < selectedPump.current_meter_reading) {
+    errors.push(`Opening meter cannot be less than current pump reading (${selectedPump.current_meter_reading}L)`);
+  }
+  
+  return errors;
+};
+
+const validateExpenseForm = (form: any): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.description?.trim()) errors.push('Description is required');
+  if (!form.amount || parseFloat(form.amount) <= 0) errors.push('Valid amount is required');
+  if (!form.expense_date) errors.push('Date is required');
+  
+  const amount = parseFloat(form.amount);
+  if (amount > 1000000) errors.push('Amount seems too high. Please verify.');
+  
+  return errors;
+};
+
+const validateInventoryForm = (form: any): string[] => {
+  const errors: string[] = [];
+  
+  if (!form.product_id) errors.push('Product selection is required');
+  if (!form.opening_stock && form.opening_stock !== '0') errors.push('Opening stock is required');
+  if (!form.closing_stock && form.closing_stock !== '0') errors.push('Closing stock is required');
+  
+  const opening = parseFloat(form.opening_stock);
+  const closing = parseFloat(form.closing_stock);
+  const received = parseFloat(form.received) || 0;
+  
+  if (isNaN(opening) || isNaN(closing)) {
+    errors.push('Please enter valid stock values');
+    return errors;
+  }
+  
+  if (closing < 0) errors.push('Closing stock cannot be negative');
+  if (opening < 0) errors.push('Opening stock cannot be negative');
+  if (received < 0) errors.push('Received quantity cannot be negative');
+  
+  const expectedClosing = opening + received;
+  if (Math.abs(closing - expectedClosing) > expectedClosing * 0.1) {
+    errors.push('Closing stock differs significantly from expected value. Please verify.');
+  }
+  
+  return errors;
+};
+
+// Mobile-optimized components
+const MobileHeader = ({ 
+  station, 
+  isOnline, 
+  pendingSync, 
+  onMenuPress,
+  onSyncPress,
+  onRefreshPress,
+  isLoading
+}: { 
+  station: Station | null;
+  isOnline: boolean;
   pendingSync: number;
-  batteryLevel: number;
-  isCharging: boolean;
+  onMenuPress: () => void;
+  onSyncPress: () => void;
+  onRefreshPress: () => void;
+  isLoading: boolean;
 }) => (
-  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-2">
+  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-3">
     <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {isOnline ? (
-          <div className="flex items-center gap-1">
-            <Wifi className="w-3 h-3 text-green-600" />
-            <span className="text-xs text-green-700">Online</span>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onMenuPress}
+        className="rounded-full"
+      >
+        <Menu className="w-5 h-5" />
+      </Button>
+      <div className="flex-1 text-center px-2">
+        <h1 className="text-base font-semibold text-gray-900 truncate">
+          {station?.name || 'Station'}
+        </h1>
+        <div className="flex items-center justify-center gap-2 mt-1">
+          <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${isOnline ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+            {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
-        ) : (
-          <div className="flex items-center gap-1">
-            <WifiOff className="w-3 h-3 text-orange-600" />
-            <span className="text-xs text-orange-700">Offline</span>
-          </div>
-        )}
-        {pendingSync > 0 && (
-          <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">
-            {pendingSync} pending
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1">
-          {isCharging ? (
-            <BatteryCharging className="w-3 h-3 text-green-600" />
-          ) : (
-            <Battery className="w-3 h-3 text-gray-600" />
+          {pendingSync > 0 && (
+            <div className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
+              {pendingSync} pending
+            </div>
           )}
-          <span className="text-xs">{batteryLevel}%</span>
         </div>
-        <span className="text-xs text-gray-500">
-          {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
+      </div>
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onRefreshPress}
+          disabled={isLoading}
+          className="rounded-full"
+        >
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+        </Button>
+        {pendingSync > 0 && isOnline && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onSyncPress}
+            className="rounded-full"
+          >
+            <Upload className="w-4 h-4" />
+          </Button>
+        )}
       </div>
     </div>
   </div>
 );
 
-const MobileQuickAction = ({ 
-  icon: Icon, 
-  label, 
-  onClick, 
-  variant = "default",
-  disabled = false 
-}: { 
-  icon: React.ElementType; 
-  label: string; 
-  onClick: () => void;
-  variant?: "default" | "primary" | "success" | "warning";
-  disabled?: boolean;
-}) => {
-  const variantClasses = {
-    default: "bg-gray-100 hover:bg-gray-200 border-gray-200",
-    primary: "bg-blue-100 hover:bg-blue-200 border-blue-200 text-blue-700",
-    success: "bg-green-100 hover:bg-green-200 border-green-200 text-green-700",
-    warning: "bg-orange-100 hover:bg-orange-200 border-orange-200 text-orange-700",
-  };
-
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex flex-col items-center justify-center p-3 rounded-xl border ${variantClasses[variant]} active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed`}
-    >
-      <Icon className="w-6 h-6 mb-1" />
-      <span className="text-xs font-medium">{label}</span>
-    </button>
-  );
-};
-
-const MobileStatCard = ({ 
-  title, 
-  value, 
-  icon: Icon, 
-  trend, 
-  subtitle,
-  onClick 
-}: { 
-  title: string; 
-  value: string | number; 
-  icon: React.ElementType;
-  trend?: 'up' | 'down' | 'neutral';
-  subtitle?: string;
-  onClick?: () => void;
-}) => {
-  const trendColors = {
-    up: "text-green-600",
-    down: "text-red-600",
-    neutral: "text-gray-600"
-  };
-
-  return (
-    <Card 
-      className="active:scale-98 transition-transform"
-      onClick={onClick}
-    >
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-xs text-gray-500 mb-1">{title}</p>
-            <p className="text-xl font-bold text-gray-900">{value}</p>
-            {subtitle && <p className="text-xs text-gray-600 mt-1">{subtitle}</p>}
-            {trend && (
-              <div className={`flex items-center gap-1 mt-1 text-xs ${trendColors[trend]}`}>
-                {trend === 'up' && <TrendingUp className="w-3 h-3" />}
-                {trend === 'down' && <TrendingDown className="w-3 h-3" />}
-                {subtitle}
-              </div>
-            )}
-          </div>
-          <div className="p-2 bg-gray-100 rounded-lg">
-            <Icon className="w-5 h-5 text-gray-700" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-};
-
-const MobileBottomNav = ({ activeTab, onTabChange }: { 
+const MobileTabNavigation = ({ activeTab, setActiveTab }: { 
   activeTab: string; 
-  onTabChange: (tab: string) => void 
+  setActiveTab: (tab: string) => void;
 }) => {
   const tabs = [
-    { id: 'dashboard', label: 'Home', icon: Home },
-    { id: 'sales', label: 'Sales', icon: BarChart },
+    { id: 'operations', label: 'Ops', icon: BarChart3 },
+    { id: 'financial', label: 'Finance', icon: DollarSign },
     { id: 'inventory', label: 'Stock', icon: Package },
-    { id: 'expenses', label: 'Expenses', icon: Wallet },
-    { id: 'more', label: 'More', icon: Menu },
+    { id: 'equipment', label: 'Pumps', icon: Gauge },
+    { id: 'reports', label: 'Reports', icon: Download },
   ];
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-2 safe-area-bottom">
-      <div className="flex items-center justify-around">
+    <div className="sticky top-[60px] z-40 bg-white border-b border-gray-200">
+      <div className="flex overflow-x-auto px-4 py-2 no-scrollbar">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          
           return (
-            <button
+            <Button
               key={tab.id}
-              onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center justify-center p-2 rounded-lg transition-colors ${
-                isActive ? 'text-blue-600 bg-blue-50' : 'text-gray-600'
+              variant="ghost"
+              size="sm"
+              className={`flex-shrink-0 flex items-center gap-1 px-3 py-2 mx-1 rounded-lg ${
+                activeTab === tab.id
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-600'
               }`}
+              onClick={() => setActiveTab(tab.id)}
             >
-              <Icon className="w-5 h-5" />
-              <span className="text-xs mt-1">{tab.label}</span>
-            </button>
+              <Icon className="w-4 h-4" />
+              <span className="text-xs font-medium">{tab.label}</span>
+            </Button>
           );
         })}
       </div>
@@ -357,69 +449,688 @@ const MobileBottomNav = ({ activeTab, onTabChange }: {
   );
 };
 
-const PullToRefresh = ({ onRefresh, refreshing }: { 
-  onRefresh: () => void; 
-  refreshing: boolean;
+const MobileStatsCard = ({ 
+  dailyReport, 
+  expenseStats, 
+  fuelStockCard, 
+  pumps 
+}: { 
+  dailyReport: DailyReport | null;
+  expenseStats: ExpenseStats;
+  fuelStockCard: FuelStockCard[];
+  pumps: Pump[];
 }) => {
-  const [startY, setStartY] = useState(0);
-  const [currentY, setCurrentY] = useState(0);
-  const [refreshingState, setRefreshingState] = useState(false);
+  const stats = [
+    {
+      label: "Today's Sales",
+      value: `₵${(dailyReport?.total_sales || 0).toLocaleString()}`,
+      icon: DollarSign,
+      color: 'green',
+      subtext: `${dailyReport?.sales?.length || 0} transactions`
+    },
+    {
+      label: "Expenses",
+      value: `₵${expenseStats.total_expenses.toLocaleString()}`,
+      icon: TrendingUp,
+      color: 'red',
+      subtext: `${expenseStats.pending_approval > 0 ? `${expenseStats.pending_approval} pending` : 'All settled'}`
+    },
+    {
+      label: "Current Stock",
+      value: `${fuelStockCard.reduce((sum, item) => sum + (item.current_stock || 0), 0).toLocaleString()}L`,
+      icon: Database,
+      color: 'blue',
+      subtext: `${fuelStockCard.length} products`
+    },
+    {
+      label: "Active Pumps",
+      value: pumps.length.toString(),
+      icon: Gauge,
+      color: 'purple',
+      subtext: `${pumps.filter(p => p.status === 'active').length} active`
+    },
+  ];
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (window.scrollY === 0) {
-      setStartY(e.touches[0].clientY);
-      setCurrentY(e.touches[0].clientY);
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (window.scrollY === 0 && startY > 0) {
-      setCurrentY(e.touches[0].clientY);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    const pullDistance = currentY - startY;
-    if (pullDistance > 100 && !refreshing) {
-      setRefreshingState(true);
-      onRefresh();
-      setTimeout(() => setRefreshingState(false), 1000);
-    }
-    setStartY(0);
-    setCurrentY(0);
-  };
-
-  const pullDistance = Math.max(0, currentY - startY);
-  const progress = Math.min(100, (pullDistance / 100) * 100);
-
-  if (refreshing || refreshingState) {
-    return (
-      <div className="flex items-center justify-center py-3 bg-blue-50">
-        <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
-        <span className="ml-2 text-sm text-blue-600">Refreshing...</span>
-      </div>
-    );
-  }
-
-  if (pullDistance > 0) {
-    return (
-      <div 
-        className="flex items-center justify-center py-3"
-        style={{
-          height: `${Math.min(100, pullDistance)}px`,
-          background: `linear-gradient(to bottom, rgba(59, 130, 246, ${progress/100}), white)`
-        }}
-      >
-        <RefreshCw className="w-5 h-5 text-blue-600" style={{ transform: `rotate(${progress * 3.6}deg)` }} />
-        <span className="ml-2 text-sm text-blue-600">
-          {progress >= 100 ? 'Release to refresh' : 'Pull to refresh'}
-        </span>
-      </div>
-    );
-  }
-
-  return null;
+  return (
+    <div className="grid grid-cols-2 gap-3 px-4 py-3">
+      {stats.map((stat, index) => {
+        const Icon = stat.icon;
+        return (
+          <div key={index} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-600 mb-1">{stat.label}</p>
+                <p className="text-lg font-bold text-gray-900">{stat.value}</p>
+                <p className="text-xs text-gray-500 mt-1">{stat.subtext}</p>
+              </div>
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                stat.color === 'green' ? 'bg-green-50' :
+                stat.color === 'red' ? 'bg-red-50' :
+                stat.color === 'blue' ? 'bg-blue-50' : 'bg-purple-50'
+              }`}>
+                <Icon className={`w-5 h-5 ${
+                  stat.color === 'green' ? 'text-green-600' :
+                  stat.color === 'red' ? 'text-red-600' :
+                  stat.color === 'blue' ? 'text-blue-600' : 'text-purple-600'
+                }`} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 };
+
+const MobilePumpPrices = ({ 
+  pumpPrices, 
+  loading, 
+  onRefresh 
+}: { 
+  pumpPrices: PumpPrice[]; 
+  loading: boolean; 
+  onRefresh: () => void;
+}) => (
+  <div className="px-4 mb-3">
+    <div className="bg-white rounded-xl border border-gray-200 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-gray-900">Current Prices</h3>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRefresh}
+          disabled={loading}
+          className="h-7 px-2 text-xs"
+        >
+          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {loading ? (
+          Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between py-2">
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-4 w-12" />
+            </div>
+          ))
+        ) : pumpPrices.length > 0 ? (
+          pumpPrices.slice(0, 2).map((price) => (
+            <div key={price.product_id} className="flex items-center justify-between py-1">
+              <span className="text-sm text-gray-700">{price.product_type}</span>
+              <span className="text-sm font-semibold text-green-600">
+                ₵{price.price_per_liter.toFixed(2)}
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="text-center py-2">
+            <p className="text-sm text-gray-500">No prices set</p>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+const MobileSalesCard = ({ 
+  dailyReport, 
+  onRecordSale,
+  onDebugPumps
+}: { 
+  dailyReport: DailyReport | null; 
+  onRecordSale: () => void;
+  onDebugPumps: () => void;
+}) => (
+  <div className="px-4 mb-4">
+    <div className="bg-white rounded-xl border border-gray-200">
+      <div className="p-4 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-900">Sales Today</h3>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onDebugPumps}
+              className="h-7 px-2 text-xs"
+            >
+              <AlertTriangle className="w-3 h-3" />
+            </Button>
+            <Button
+              size="sm"
+              onClick={onRecordSale}
+              className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="w-3 h-3 mr-1" />
+              Record
+            </Button>
+          </div>
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="space-y-3">
+          {dailyReport?.sales?.slice(0, 3).map((sale: any) => (
+            <div key={sale.id} className="flex items-center justify-between py-2">
+              <div>
+                <p className="text-sm font-medium text-gray-900">
+                  {sale.products?.name || 'Unknown'}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {(sale.closing_meter - sale.opening_meter).toFixed(1)}L •{' '}
+                  {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+              <p className="text-sm font-semibold text-gray-900">
+                ₵{sale.total_amount?.toFixed(2) || '0.00'}
+              </p>
+            </div>
+          ))}
+          {(!dailyReport?.sales || dailyReport.sales.length === 0) && (
+            <div className="text-center py-4">
+              <p className="text-sm text-gray-500">No sales today</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+const MobileExpensesCard = ({ 
+  expenses, 
+  searchTerm,
+  filterStatus,
+  onSearchChange,
+  onFilterChange,
+  onAddExpense,
+  onUpdateStatus,
+  onDelete
+}: { 
+  expenses: Expense[];
+  searchTerm: string;
+  filterStatus: string;
+  onSearchChange: (value: string) => void;
+  onFilterChange: (value: string) => void;
+  onAddExpense: () => void;
+  onUpdateStatus: (id: string, status: 'approved' | 'rejected') => void;
+  onDelete: (id: string) => void;
+}) => {
+  const filteredExpenses = useMemo(() => {
+    let filtered = expenses;
+    
+    if (searchTerm) {
+      filtered = filtered.filter(expense =>
+        expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        expense.category.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(expense => expense.status === filterStatus);
+    }
+    
+    return filtered;
+  }, [expenses, searchTerm, filterStatus]);
+
+  return (
+    <div className="px-4 mb-4">
+      <div className="bg-white rounded-xl border border-gray-200">
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900">Recent Expenses</h3>
+            <Button
+              size="sm"
+              onClick={onAddExpense}
+              className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="w-3 h-3 mr-1" />
+              Add
+            </Button>
+          </div>
+        </div>
+        <div className="p-4">
+          {/* Search and Filter */}
+          <div className="flex gap-2 mb-3">
+            <div className="flex-1">
+              <Input
+                placeholder="Search expenses..."
+                value={searchTerm}
+                onChange={(e) => onSearchChange(e.target.value)}
+                className="h-8 text-sm"
+              />
+            </div>
+            <select
+              className="px-2 py-1 border border-gray-300 rounded-lg bg-white text-gray-900 text-sm h-8"
+              value={filterStatus}
+              onChange={(e) => onFilterChange(e.target.value)}
+            >
+              <option value="all">All</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+
+          {/* Expenses List */}
+          <div className="space-y-2">
+            {filteredExpenses.slice(0, 3).map((expense) => (
+              <div key={expense.id} className="p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-start justify-between mb-1">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900 capitalize">
+                      {expense.category}
+                    </p>
+                    <p className="text-xs text-gray-600 truncate">
+                      {expense.description}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold text-gray-900">
+                      ₵{expense.amount.toFixed(2)}
+                    </p>
+                    <div className="mt-1">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        expense.status === 'approved' ? 'bg-green-100 text-green-700' :
+                        expense.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                        'bg-red-100 text-red-700'
+                      }`}>
+                        {expense.status}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-xs text-gray-500 mt-2">
+                  <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
+                  <div className="flex gap-1">
+                    {expense.status === 'pending' && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1 text-green-600"
+                          onClick={() => onUpdateStatus(expense.id, 'approved')}
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1 text-red-600"
+                          onClick={() => onUpdateStatus(expense.id, 'rejected')}
+                        >
+                          <XCircle className="w-3 h-3" />
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-1 text-red-600"
+                      onClick={() => onDelete(expense.id)}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {filteredExpenses.length === 0 && (
+              <div className="text-center py-4">
+                <p className="text-sm text-gray-500">
+                  {expenses.length === 0 ? 'No expenses' : 'No matching expenses'}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MobileQuickActions = ({
+  onStationCheck,
+  onTankDipping,
+  onInventory,
+  onExpense
+}: {
+  onStationCheck: () => void;
+  onTankDipping: () => void;
+  onInventory: () => void;
+  onExpense: () => void;
+}) => (
+  <div className="px-4 mb-4">
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <h3 className="text-sm font-semibold text-gray-900 mb-3">Quick Actions</h3>
+      <div className="grid grid-cols-4 gap-2">
+        <Button
+          variant="outline"
+          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
+          onClick={onStationCheck}
+        >
+          <Building2 className="w-5 h-5 text-gray-700" />
+          <span className="text-xs text-gray-700">Station Check</span>
+        </Button>
+        <Button
+          variant="outline"
+          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
+          onClick={onTankDipping}
+        >
+          <Fuel className="w-5 h-5 text-gray-700" />
+          <span className="text-xs text-gray-700">Tank Dip</span>
+        </Button>
+        <Button
+          variant="outline"
+          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
+          onClick={onInventory}
+        >
+          <Package className="w-5 h-5 text-gray-700" />
+          <span className="text-xs text-gray-700">Inventory</span>
+        </Button>
+        <Button
+          variant="outline"
+          className="h-16 flex-col gap-2 bg-white hover:bg-gray-50 border-gray-300"
+          onClick={onExpense}
+        >
+          <Receipt className="w-5 h-5 text-gray-700" />
+          <span className="text-xs text-gray-700">Expense</span>
+        </Button>
+      </div>
+    </div>
+  </div>
+);
+
+const MobileSideMenu = ({ 
+  show, 
+  onClose, 
+  station,
+  user,
+  onNavigate 
+}: { 
+  show: boolean; 
+  onClose: () => void;
+  station: Station | null;
+  user: any;
+  onNavigate: (path: string) => void;
+}) => (
+  <div className={`fixed inset-0 z-50 transform transition-transform duration-300 ${
+    show ? 'translate-x-0' : 'translate-x-full'
+  }`}>
+    <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+    <div className="absolute right-0 top-0 bottom-0 w-72 bg-white shadow-xl">
+      <div className="p-4 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-900">Menu</h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="rounded-full"
+          >
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="space-y-4">
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <p className="text-sm font-medium text-gray-900">{station?.name}</p>
+            <p className="text-xs text-gray-600 mt-1">OMC: {station?.omc?.name || 'N/A'}</p>
+            <p className="text-xs text-gray-600">Manager: {user?.name}</p>
+          </div>
+        </div>
+        
+        <div className="space-y-2 mt-6">
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              onNavigate('/dashboard');
+              onClose();
+            }}
+          >
+            <Home className="w-4 h-4 mr-3" />
+            Dashboard
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              onNavigate('/settings');
+              onClose();
+            }}
+          >
+            <Settings className="w-4 h-4 mr-3" />
+            Settings
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              onNavigate('/reports');
+              onClose();
+            }}
+          >
+            <FileText className="w-4 h-4 mr-3" />
+            Reports
+          </Button>
+        </div>
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
+        <Button
+          variant="outline"
+          className="w-full text-red-600 border-red-200 hover:bg-red-50"
+          onClick={() => {
+            // Handle logout
+            onClose();
+          }}
+        >
+          <LogOut className="w-4 h-4 mr-2" />
+          Logout
+        </Button>
+      </div>
+    </div>
+  </div>
+);
+
+const MobileSalesDialog = ({
+  open,
+  onOpenChange,
+  salesForm,
+  setSalesForm,
+  pumps,
+  selectedPump,
+  setSelectedPump,
+  products,
+  user,
+  getStationPrice,
+  calculateSalesAmount,
+  handleRecordSales,
+  submitting,
+  debugPumpsTable
+}: any) => (
+  <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="max-w-full h-[90vh] bg-white p-0">
+      <div className="sticky top-0 bg-white border-b border-gray-200 p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">Record Sale</h2>
+          <Button variant="ghost" size="icon" onClick={() => onOpenChange(false)}>
+            <X className="w-5 h-5" />
+          </Button>
+        </div>
+      </div>
+      <div className="p-4 overflow-y-auto h-full">
+        <form onSubmit={handleRecordSales} className="space-y-6">
+          {/* Pump Selection */}
+          <div className="space-y-3">
+            <h3 className="font-medium text-gray-900">Select Pump</h3>
+            {pumps.length === 0 && (
+              <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                <p className="text-sm text-yellow-800">No pumps found</p>
+                <Button 
+                  onClick={debugPumpsTable} 
+                  variant="outline" 
+                  size="sm" 
+                  className="mt-2 text-xs"
+                >
+                  Debug Pumps
+                </Button>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              {pumps.map((pump: any) => (
+                <Button
+                  key={pump.id}
+                  type="button"
+                  variant={selectedPump?.id === pump.id ? 'default' : 'outline'}
+                  className={`h-14 flex-col gap-1 ${selectedPump?.id === pump.id ? 'bg-blue-600' : ''}`}
+                  onClick={() => {
+                    setSelectedPump(pump);
+                    const matchingProduct = products.find((p: any) => 
+                      p.name.toLowerCase() === pump.fuel_type?.toLowerCase()
+                    );
+                    const price = getStationPrice(user?.station_id || '', matchingProduct?.id || '') || 0;
+                    setSalesForm({
+                      ...salesForm,
+                      pump_id: pump.id,
+                      product_type: pump.fuel_type || 'Petrol',
+                      product_id: matchingProduct?.id || '',
+                      opening_meter: pump.current_meter_reading?.toString() || '0',
+                      unit_price: price.toString()
+                    });
+                  }}
+                >
+                  <span className="text-xs">{pump.name}</span>
+                  <span className="text-xs opacity-80">{pump.fuel_type}</span>
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {/* Product Selection */}
+          <div className="space-y-3">
+            <h3 className="font-medium text-gray-900">Product</h3>
+            <select
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900"
+              value={salesForm.product_id}
+              onChange={(e) => {
+                const selectedProduct = products.find((p: any) => p.id === e.target.value);
+                const price = getStationPrice(user?.station_id || '', e.target.value) || 0;
+                setSalesForm({ 
+                  ...salesForm, 
+                  product_id: e.target.value,
+                  product_type: selectedProduct?.name || 'Petrol',
+                  unit_price: price.toString()
+                });
+                if (salesForm.opening_meter && salesForm.closing_meter) {
+                  calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, e.target.value);
+                }
+              }}
+              required
+            >
+              <option value="">Select product</option>
+              {products.map((product: any) => (
+                <option key={product.id} value={product.id}>
+                  {product.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Meter Readings */}
+          <div className="space-y-3">
+            <h3 className="font-medium text-gray-900">Meter Readings (L)</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-sm text-gray-700">Opening</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={salesForm.opening_meter}
+                  onChange={(e) => {
+                    setSalesForm({ ...salesForm, opening_meter: e.target.value });
+                    if (e.target.value && salesForm.closing_meter && salesForm.product_id) {
+                      calculateSalesAmount(e.target.value, salesForm.closing_meter, salesForm.product_id);
+                    }
+                  }}
+                  placeholder="0.00"
+                  required
+                  className="bg-white text-gray-900"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-sm text-gray-700">Closing</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={salesForm.closing_meter}
+                  onChange={(e) => {
+                    setSalesForm({ ...salesForm, closing_meter: e.target.value });
+                    if (salesForm.opening_meter && e.target.value && salesForm.product_id) {
+                      calculateSalesAmount(salesForm.opening_meter, e.target.value, salesForm.product_id);
+                    }
+                  }}
+                  placeholder="0.00"
+                  required
+                  className="bg-white text-gray-900"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Calculation Preview */}
+          <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-blue-700">Volume Sold</span>
+              <span className="text-sm font-bold text-blue-800">
+                {salesForm.opening_meter && salesForm.closing_meter 
+                  ? (parseFloat(salesForm.closing_meter) - parseFloat(salesForm.opening_meter)).toFixed(2) 
+                  : '0.00'} L
+              </span>
+            </div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-blue-700">Unit Price</span>
+              <span className="text-sm font-bold text-blue-800">
+                ₵{getStationPrice(user?.station_id || '', salesForm.product_id)?.toFixed(2) || '0.00'}/L
+              </span>
+            </div>
+            <div className="border-t border-blue-200 pt-2 mt-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-blue-700">Total Amount</span>
+                <div className="flex items-center gap-2">
+                  <Calculator className="w-4 h-4 text-blue-600" />
+                  <span className="text-lg font-bold text-blue-700">
+                    ₵{salesForm.calculated_amount}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Date */}
+          <div className="space-y-1">
+            <Label className="text-sm text-gray-700">Date</Label>
+            <Input
+              type="date"
+              value={salesForm.date}
+              onChange={(e) => setSalesForm({ ...salesForm, date: e.target.value })}
+              required
+              className="bg-white text-gray-900"
+            />
+          </div>
+
+          <Button 
+            type="submit" 
+            className="w-full h-12" 
+            style={{ backgroundColor: '#0B2265' }}
+            disabled={submitting || !salesForm.pump_id}
+          >
+            {submitting ? 'Recording...' : 'Record Sale'}
+          </Button>
+        </form>
+      </div>
+    </DialogContent>
+  </Dialog>
+);
 
 // Main Mobile Component
 export function MobileStationManagerDashboard() {
@@ -427,38 +1138,72 @@ export function MobileStationManagerDashboard() {
   const { 
     getStationPrice, 
     getStationAllPrices,
+    loading: pricesLoading,
     refreshPrices 
   } = usePrices();
   
-  // State management
+  // State management (keep same as before)
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingSync, setPendingSync] = useState(0);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('operations');
   const [pumpPrices, setPumpPrices] = useState<PumpPrice[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
   const [station, setStation] = useState<Station | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [batteryLevel, setBatteryLevel] = useState(100);
-  const [isCharging, setIsCharging] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
   
-  // Data states
+  // Data states (keep same as before)
   const [pumps, setPumps] = useState<Pump[]>([]);
   const [selectedPump, setSelectedPump] = useState<Pump | null>(null);
+  const [inventoryHistory, setInventoryHistory] = useState<InventoryHistory[]>([]);
   const [fuelStockCard, setFuelStockCard] = useState<FuelStockCard[]>([]);
+  const [banks, setBanks] = useState<Bank[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [expenseStats, setExpenseStats] = useState<ExpenseStats>({
+    total_expenses: 0,
+    operational: 0,
+    fixed: 0,
+    staff: 0,
+    maintenance: 0,
+    other: 0,
+    pending_approval: 0
+  });
   
-  // Dialog states
+  // Loading states (keep same as before)
+  const [loadingStates, setLoadingStates] = useState<LoadingStates>({
+    sales: false,
+    expenses: false,
+    inventory: false,
+    pumps: false,
+    prices: false,
+    banks: false,
+    dailyReport: false,
+    station: false
+  });
+
+  // Configuration (keep same as before)
+  const [dashboardConfig, setDashboardConfig] = useState<DashboardConfig>({
+    autoRefresh: true,
+    refreshInterval: 30000,
+    defaultView: 'operations',
+    showNotifications: true
+  });
+
+  // Dialog states (keep same as before)
   const [showSalesDialog, setShowSalesDialog] = useState(false);
   const [showExpenseDialog, setShowExpenseDialog] = useState(false);
   const [showInventoryDialog, setShowInventoryDialog] = useState(false);
-  const [showQuickActions, setShowQuickActions] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
-  
-  // Form states
+  const [showTankDippingDialog, setShowTankDippingDialog] = useState(false);
+  const [showStationCheckDialog, setShowStationCheckDialog] = useState(false);
+  const [showBankDialog, setShowBankDialog] = useState(false);
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
+
+  // Form states (keep same as before)
   const [salesForm, setSalesForm] = useState({
     pump_id: '',
+    product_type: 'Petrol',
     product_id: '',
     opening_meter: '',
     closing_meter: '',
@@ -474,9 +1219,11 @@ export function MobileStationManagerDashboard() {
     expense_date: new Date().toISOString().split('T')[0],
     type: 'operational' as 'operational' | 'fixed' | 'staff' | 'maintenance' | 'other',
     notes: '',
+    receipt_url: ''
   });
 
   const [inventoryForm, setInventoryForm] = useState({
+    product_type: 'Petrol',
     product_id: '',
     opening_stock: '',
     received: '',
@@ -484,72 +1231,61 @@ export function MobileStationManagerDashboard() {
     date: new Date().toISOString().split('T')[0]
   });
 
-  // Mobile config
-  const [mobileConfig, setMobileConfig] = useState<MobileDashboardConfig>({
-    showQuickActions: true,
-    showOfflineWarning: true,
-    enableTouchGestures: true,
-    showBatterySaver: false,
+  const [tankDippingForm, setTankDippingForm] = useState({
+    tank_number: '1',
+    product_type: 'Petrol',
+    product_id: '',
+    dip_reading: '',
+    water_level: '',
+    temperature: '',
+    date: new Date().toISOString().split('T')[0],
+    time: new Date().toTimeString().split(' ')[0].substring(0, 5)
   });
 
-  // Refs
+  const [stationCheckForm, setStationCheckForm] = useState({
+    check_type: 'Opening',
+    safety_equipment: true,
+    cleanliness: true,
+    equipment_functional: true,
+    notes: '',
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  const [bankForm, setBankForm] = useState({
+    name: '',
+    account_number: '',
+    branch: '',
+    is_active: true
+  });
+
+  const [products, setProducts] = useState<Product[]>([]);
+
+  // Refs (keep same as before)
   const initializedRef = useRef(false);
+  const syncIntervalRef = useRef<NodeJS.Timeout>();
+  const priceLoadAttemptedRef = useRef(false);
+  const realtimeSubscriptionRef = useRef<any>(null);
 
-  // Battery monitoring
-  useEffect(() => {
-    const updateBattery = async () => {
-      try {
-        if ('getBattery' in navigator) {
-          const battery = await (navigator as any).getBattery();
-          
-          const updateBatteryInfo = () => {
-            setBatteryLevel(Math.round(battery.level * 100));
-            setIsCharging(battery.charging);
-          };
-          
-          updateBatteryInfo();
-          
-          battery.addEventListener('levelchange', updateBatteryInfo);
-          battery.addEventListener('chargingchange', updateBatteryInfo);
-          
-          return () => {
-            battery.removeEventListener('levelchange', updateBatteryInfo);
-            battery.removeEventListener('chargingchange', updateBatteryInfo);
-          };
-        }
-      } catch (error) {
-        console.error('Battery API not supported:', error);
-      }
-    };
-
-    updateBattery();
+  // Loading state helpers (keep same as before)
+  const setLoading = useCallback((key: keyof LoadingStates, loading: boolean) => {
+    setLoadingStates(prev => ({ ...prev, [key]: loading }));
   }, []);
 
-  // Network status
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (pendingSync > 0) {
-        syncOfflineData();
-      }
-    };
-    
-    const handleOffline = () => setIsOnline(false);
+  const isLoading = useCallback(() => {
+    return Object.values(loadingStates).some(state => state);
+  }, [loadingStates]);
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [pendingSync]);
-
-  // Data loading functions
+  // Keep all existing functions exactly as they are
   const loadStation = useCallback(async () => {
-    if (!user?.station_id) return;
+    if (!user?.station_id) {
+      console.log('❌ No station ID available');
+      return;
+    }
     
+    setLoading('station', true);
     try {
+      console.log('🔄 Loading station details...');
+      
       const { data, error } = await supabase
         .from('stations')
         .select(`
@@ -562,25 +1298,43 @@ export function MobileStationManagerDashboard() {
         .eq('id', user.station_id)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Station fetch error:', error);
+        throw error;
+      }
+      
+      console.log('✅ Station loaded:', data);
       setStation(data);
     } catch (error: any) {
-      console.error('Failed to load station:', error);
+      console.error('❌ Failed to load station:', error);
+      handleApiError(error, 'Loading station');
+    } finally {
+      setLoading('station', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
 
   const loadPumps = useCallback(async () => {
-    if (!user?.station_id) return;
+    if (!user?.station_id) {
+      console.log('❌ No station ID available');
+      return;
+    }
     
+    setLoading('pumps', true);
     try {
+      console.log('🔄 Loading pumps for station:', user.station_id);
+      
       const { data, error } = await supabase
         .from('pumps')
         .select('*')
         .eq('station_id', user.station_id)
         .order('number');
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Pump fetch error:', error);
+        throw error;
+      }
       
+      console.log('✅ Pumps loaded:', data);
       const pumpsData = data || [];
       setPumps(pumpsData);
       
@@ -596,23 +1350,33 @@ export function MobileStationManagerDashboard() {
           ...prev,
           pump_id: defaultPump.id,
           opening_meter: defaultPump.current_meter_reading?.toString() || '0',
+          product_type: defaultPump.fuel_type || 'Petrol',
           product_id: matchingProduct?.id || ''
         }));
+      } else {
+        console.log('⚠️ No active pumps found for this station');
+        toast.info('No active pumps configured for this station');
       }
     } catch (error: any) {
-      console.error('Failed to load pumps:', error);
+      console.error('❌ Failed to load pumps:', error);
+      handleApiError(error, 'Loading pumps');
       setPumps([]);
+    } finally {
+      setLoading('pumps', false);
     }
-  }, [user?.station_id, products]);
+  }, [user?.station_id, products, setLoading]);
 
   const loadProducts = useCallback(async () => {
+    setLoading('inventory', true);
     try {
+      console.log('🔄 Loading products...');
       const { data, error } = await supabase
         .from('products')
         .select('*')
         .order('name');
 
       if (error) {
+        console.error('Product fetch error:', error);
         const fallbackProducts: Product[] = [
           { id: 'petrol', name: 'Petrol', unit: 'L' },
           { id: 'diesel', name: 'Diesel', unit: 'L' },
@@ -623,16 +1387,24 @@ export function MobileStationManagerDashboard() {
       }
       
       const productsData = data || [];
+      console.log('✅ Products loaded:', productsData);
       setProducts(productsData);
       
       if (productsData.length > 0 && pumps.length === 0) {
         const defaultProduct = productsData[0];
         setSalesForm(prev => ({ 
           ...prev, 
+          product_type: defaultProduct.name,
           product_id: defaultProduct.id 
         }));
         setInventoryForm(prev => ({
           ...prev,
+          product_type: defaultProduct.name,
+          product_id: defaultProduct.id
+        }));
+        setTankDippingForm(prev => ({
+          ...prev,
+          product_type: defaultProduct.name,
           product_id: defaultProduct.id
         }));
       }
@@ -644,35 +1416,68 @@ export function MobileStationManagerDashboard() {
         { id: 'lpg', name: 'LPG', unit: 'kg' }
       ];
       setProducts(fallbackProducts);
+    } finally {
+      setLoading('inventory', false);
     }
-  }, [pumps.length]);
+  }, [pumps.length, setLoading]);
 
   const loadPumpPrices = useCallback(async (forceRefresh = false) => {
     if (!user?.station_id) return;
     
+    setLoading('prices', true);
     try {
+      console.log('🔄 Loading pump prices...');
+      
       if (forceRefresh) {
         await refreshPrices();
       }
       
       const stationAllPrices = getStationAllPrices(user.station_id);
+      console.log('✅ Station prices:', stationAllPrices);
       
-      const transformedPrices: PumpPrice[] = stationAllPrices.map(price => ({
-        product_type: price.product_name,
-        product_id: price.product_id,
-        price_per_liter: price.selling_price,
-        last_updated: new Date().toISOString()
-      }));
-
-      setPumpPrices(transformedPrices);
-      
-      if (transformedPrices.length > 0) {
-        const currentPrice = transformedPrices[0];
-        setSalesForm(prev => ({
-          ...prev,
-          product_id: currentPrice.product_id,
-          unit_price: currentPrice.price_per_liter.toString()
+      if (stationAllPrices.length === 0 && !priceLoadAttemptedRef.current) {
+        console.log('🔄 No prices found, attempting refresh...');
+        priceLoadAttemptedRef.current = true;
+        await refreshPrices();
+        const refreshedPrices = getStationAllPrices(user.station_id);
+        
+        const transformedPrices: PumpPrice[] = refreshedPrices.map(price => ({
+          product_type: price.product_name,
+          product_id: price.product_id,
+          price_per_liter: price.selling_price,
+          last_updated: new Date().toISOString()
         }));
+
+        setPumpPrices(transformedPrices);
+        
+        if (transformedPrices.length > 0) {
+          const currentPrice = transformedPrices[0];
+          setSalesForm(prev => ({
+            ...prev,
+            product_type: currentPrice.product_type,
+            product_id: currentPrice.product_id,
+            unit_price: currentPrice.price_per_liter.toString()
+          }));
+        }
+      } else {
+        const transformedPrices: PumpPrice[] = stationAllPrices.map(price => ({
+          product_type: price.product_name,
+          product_id: price.product_id,
+          price_per_liter: price.selling_price,
+          last_updated: new Date().toISOString()
+        }));
+
+        setPumpPrices(transformedPrices);
+        
+        if (transformedPrices.length > 0) {
+          const currentPrice = transformedPrices[0];
+          setSalesForm(prev => ({
+            ...prev,
+            product_type: currentPrice.product_type,
+            product_id: currentPrice.product_id,
+            unit_price: currentPrice.price_per_liter.toString()
+          }));
+        }
       }
     } catch (error) {
       console.error('Failed to load pump prices:', error);
@@ -682,13 +1487,71 @@ export function MobileStationManagerDashboard() {
         { product_type: 'LPG', product_id: 'lpg', price_per_liter: 8.90, last_updated: new Date().toISOString() }
       ];
       setPumpPrices(fallbackPrices);
+    } finally {
+      setLoading('prices', false);
     }
-  }, [user?.station_id, getStationAllPrices, refreshPrices]);
+  }, [user?.station_id, getStationAllPrices, refreshPrices, setLoading]);
+
+  const loadBanks = useCallback(async () => {
+    if (!user?.station_id) return;
+
+    setLoading('banks', true);
+    try {
+      console.log('🔄 Loading banks...');
+      const { data, error } = await supabase
+        .from('banks')
+        .select('*')
+        .eq('station_id', user.station_id)
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) throw error;
+      
+      setBanks(data || []);
+    } catch (error) {
+      console.error('Failed to load banks:', error);
+    } finally {
+      setLoading('banks', false);
+    }
+  }, [user?.station_id, setLoading]);
+
+  const loadInventoryHistory = useCallback(async () => {
+    if (!user?.station_id) return;
+
+    setLoading('inventory', true);
+    try {
+      console.log('🔄 Loading inventory history...');
+      const fifteenDaysAgo = new Date();
+      fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+
+      const { data, error } = await supabase
+        .from('daily_tank_stocks')
+        .select(`
+          *,
+          products (*)
+        `)
+        .eq('station_id', user.station_id)
+        .gte('stock_date', fifteenDaysAgo.toISOString().split('T')[0])
+        .order('stock_date', { ascending: false });
+
+      if (error) throw error;
+      
+      setInventoryHistory(data || []);
+    } catch (error) {
+      console.error('Failed to load inventory history:', error);
+      toast.error('Failed to load inventory history');
+    } finally {
+      setLoading('inventory', false);
+    }
+  }, [user?.station_id, setLoading]);
 
   const loadFuelStockCard = useCallback(async () => {
     if (!user?.station_id) return;
 
+    setLoading('inventory', true);
     try {
+      console.log('🔄 Loading fuel stock card...');
+      
       const { data: latestStocks, error } = await supabase
         .from('daily_tank_stocks')
         .select(`
@@ -722,19 +1585,23 @@ export function MobileStationManagerDashboard() {
       setFuelStockCard(uniqueStocks);
     } catch (error) {
       console.error('Failed to load fuel stock card:', error);
+    } finally {
+      setLoading('inventory', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
 
   const loadExpenses = useCallback(async () => {
     if (!user?.station_id) return;
 
+    setLoading('expenses', true);
     try {
+      console.log('🔄 Loading expenses...');
       const { data, error } = await supabase
         .from('expenses')
         .select('*')
         .eq('station_id', user.station_id)
         .order('expense_date', { ascending: false })
-        .limit(10);
+        .limit(50);
 
       if (error) {
         console.error('Failed to load expenses:', error);
@@ -743,48 +1610,120 @@ export function MobileStationManagerDashboard() {
       }
 
       setExpenses(data || []);
+      calculateExpenseStats(data || []);
     } catch (error) {
       console.error('Error loading expenses:', error);
       setExpenses([]);
+    } finally {
+      setLoading('expenses', false);
     }
-  }, [user?.station_id]);
+  }, [user?.station_id, setLoading]);
+
+  const calculateExpenseStats = useCallback((expenseData: Expense[]) => {
+    const stats: ExpenseStats = {
+      total_expenses: 0,
+      operational: 0,
+      fixed: 0,
+      staff: 0,
+      maintenance: 0,
+      other: 0,
+      pending_approval: 0
+    };
+
+    expenseData.forEach(expense => {
+      stats.total_expenses += expense.amount;
+      stats.pending_approval += expense.status === 'pending' ? expense.amount : 0;
+
+      switch (expense.type) {
+        case 'operational':
+          stats.operational += expense.amount;
+          break;
+        case 'fixed':
+          stats.fixed += expense.amount;
+          break;
+        case 'staff':
+          stats.staff += expense.amount;
+          break;
+        case 'maintenance':
+          stats.maintenance += expense.amount;
+          break;
+        case 'other':
+          stats.other += expense.amount;
+          break;
+      }
+    });
+
+    setExpenseStats(stats);
+  }, []);
 
   const loadDailyReport = useCallback(async () => {
     if (!user?.station_id) return;
     
+    setLoading('dailyReport', true);
     try {
+      console.log('🔄 Loading daily report...');
       const today = new Date().toISOString().split('T')[0];
       
       const [
-        { data: salesData },
-        { data: expensesData }
+        { data: salesData, error: salesError },
+        { data: inventoryData, error: inventoryError },
+        { data: shiftsData, error: shiftsError },
+        { data: expensesData, error: expensesError }
       ] = await Promise.all([
         supabase
           .from('sales')
-          .select('total_amount')
+          .select(`
+            *,
+            products(name),
+            stations(name)
+          `)
           .eq('station_id', user.station_id)
           .gte('created_at', `${today}T00:00:00`)
-          .lte('created_at', `${today}T23:59:59`),
+          .lte('created_at', `${today}T23:59:59`)
+          .order('created_at', { ascending: false }),
+        
+        supabase
+          .from('daily_tank_stocks')
+          .select(`
+            *,
+            products(name)
+          `)
+          .eq('station_id', user.station_id)
+          .gte('stock_date', today)
+          .lte('stock_date', today)
+          .order('created_at', { ascending: false }),
+        
+        supabase
+          .from('shifts')
+          .select('*')
+          .eq('station_id', user.station_id)
+          .eq('status', 'active'),
         
         supabase
           .from('expenses')
-          .select('amount')
+          .select('*')
           .eq('station_id', user.station_id)
           .gte('expense_date', today)
           .lte('expense_date', today)
       ]);
 
+      if (salesError) console.error('Sales fetch error:', salesError);
+      if (inventoryError) console.error('Inventory fetch error:', inventoryError);
+      if (shiftsError) console.error('Shifts fetch error:', shiftsError);
+      if (expensesError) console.error('Expenses fetch error:', expensesError);
+
       const total_sales = salesData?.reduce((sum, sale) => sum + (sale.total_amount || 0), 0) || 0;
       const total_expenses = expensesData?.reduce((sum, expense) => sum + (expense.amount || 0), 0) || 0;
+      const fuel_stock = inventoryData?.reduce((sum, inv) => sum + (inv.closing_stock || 0), 0) || 0;
 
       const report: DailyReport = {
         total_sales,
         total_expenses,
-        inventory: [],
+        inventory: inventoryData || [],
         sales: salesData || [],
         expenses: expensesData || [],
-        active_shifts: 0,
-        fuel_stock: 0,
+        active_shifts: shiftsData?.length || 0,
+        fuel_stock,
         pump_prices: pumpPrices,
         current_stock: fuelStockCard
       };
@@ -792,8 +1731,45 @@ export function MobileStationManagerDashboard() {
       setDailyReport(report);
     } catch (error) {
       console.error('Failed to load daily report:', error);
+      toast.error('Failed to load dashboard data');
+    } finally {
+      setLoading('dailyReport', false);
     }
-  }, [user?.station_id, pumpPrices, fuelStockCard]);
+  }, [user?.station_id, pumpPrices, fuelStockCard, setLoading]);
+
+  const calculateSalesAmount = useCallback((openingMeter: string, closingMeter: string, productId: string) => {
+    console.log('🔄 Calculating sales amount:', { openingMeter, closingMeter, productId });
+    
+    if (!openingMeter || !closingMeter) {
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+
+    const opening = parseFloat(openingMeter);
+    const closing = parseFloat(closingMeter);
+    
+    if (isNaN(opening) || isNaN(closing)) {
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+    
+    if (closing < opening) {
+      toast.error('Closing meter cannot be less than opening meter');
+      setSalesForm(prev => ({ ...prev, calculated_amount: '0.00' }));
+      return;
+    }
+
+    const volume = closing - opening;
+    const price = getStationPrice(user?.station_id || '', productId) || 0;
+    const calculatedAmount = volume * price;
+    
+    console.log('✅ Sales calculation:', { volume, price, calculatedAmount });
+    
+    setSalesForm(prev => ({
+      ...prev,
+      calculated_amount: calculatedAmount.toFixed(2)
+    }));
+  }, [user?.station_id, getStationPrice]);
 
   const updatePendingCount = useCallback(async () => {
     try {
@@ -806,65 +1782,24 @@ export function MobileStationManagerDashboard() {
 
   const syncOfflineData = useCallback(async () => {
     try {
-      toast.info('Syncing data...');
-      await offlineSync.forceSync();
+      toast.info('Starting sync...');
+      const result = await offlineSync.forceSync();
       await updatePendingCount();
       await loadDailyReport();
       await loadExpenses();
       await refreshPrices();
-      toast.success('Sync completed');
+      
+      if (result.failures > 0) {
+        toast.error(`Sync completed with ${result.failures} failures`);
+      } else {
+        toast.success('Sync completed successfully');
+      }
     } catch (error) {
       console.error('Sync failed:', error);
-      toast.error('Sync failed');
+      toast.error('Sync failed. Please try again.');
     }
   }, [loadDailyReport, loadExpenses, updatePendingCount, refreshPrices]);
 
-  // Refresh all data
-  const refreshAllData = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        loadDailyReport(),
-        loadPumpPrices(true),
-        loadFuelStockCard(),
-        loadPumps(),
-        loadExpenses(),
-      ]);
-      toast.success('Data refreshed');
-    } catch (error) {
-      console.error('Refresh failed:', error);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [loadDailyReport, loadPumpPrices, loadFuelStockCard, loadPumps, loadExpenses]);
-
-  // Initialize
-  useEffect(() => {
-    if (initializedRef.current || !user?.station_id) return;
-    
-    initializedRef.current = true;
-
-    const initializeDashboard = async () => {
-      try {
-        await offlineSync.init();
-        await loadStation();
-        await loadProducts();
-        await loadPumps();
-        await loadPumpPrices(true);
-        await loadFuelStockCard();
-        await loadExpenses();
-        await loadDailyReport();
-        await updatePendingCount();
-      } catch (error) {
-        console.error('Failed to initialize dashboard:', error);
-        toast.error('Failed to load dashboard');
-      }
-    };
-
-    initializeDashboard();
-  }, [user?.station_id]);
-
-  // Form handlers
   const handleRecordSales = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id || !salesForm.pump_id) {
@@ -872,23 +1807,34 @@ export function MobileStationManagerDashboard() {
       return;
     }
 
-    const opening = parseFloat(salesForm.opening_meter);
-    const closing = parseFloat(salesForm.closing_meter);
-    
-    if (isNaN(opening) || isNaN(closing) || closing < opening) {
-      toast.error('Invalid meter readings');
+    const validationErrors = validateSalesForm(salesForm, pumps);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
       return;
     }
 
     setSubmitting(true);
     
+    const opening = parseFloat(salesForm.opening_meter);
+    const closing = parseFloat(salesForm.closing_meter);
     const price = getStationPrice(user.station_id, salesForm.product_id) || 0;
     const volume = closing - opening;
     const calculatedAmount = volume * price;
     
+    const selectedPump = pumps.find(p => p.id === salesForm.pump_id);
+    
+    if (!selectedPump) {
+      toast.error('Selected pump not found');
+      setSubmitting(false);
+      return;
+    }
+
+    const pumpNumber = parseInt(selectedPump.number) || 1;
+
     const salesData = {
       station_id: user.station_id,
       pump_id: salesForm.pump_id,
+      pump_number: pumpNumber,
       opening_meter: opening,
       closing_meter: closing,
       unit_price: price,
@@ -897,8 +1843,13 @@ export function MobileStationManagerDashboard() {
       payment_method: 'cash',
       product_id: salesForm.product_id,
       created_by: user.id,
+      customer_type: 'retail',
       transaction_time: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     };
+
+    console.log('📝 Recording sale:', salesData);
 
     try {
       if (isOnline) {
@@ -908,7 +1859,7 @@ export function MobileStationManagerDashboard() {
 
         if (error) throw error;
 
-        await supabase
+        const { error: pumpError } = await supabase
           .from('pumps')
           .update({ 
             current_meter_reading: closing,
@@ -916,28 +1867,24 @@ export function MobileStationManagerDashboard() {
           })
           .eq('id', salesForm.pump_id);
 
-        toast.success(`Sale recorded! ₵${calculatedAmount.toFixed(2)}`);
+        if (pumpError) {
+          console.error('Pump update error:', pumpError);
+        }
+
+        toast.success(`Sale recorded successfully! ${volume.toFixed(2)}L = ₵${calculatedAmount.toFixed(2)}`);
       } else {
         await offlineSync.addToQueue('create', 'sales', salesData);
         await updatePendingCount();
-        toast.success('Sale queued for sync');
+        toast.success('Sale queued for sync (offline mode)');
       }
       
       setShowSalesDialog(false);
-      setSalesForm({
-        pump_id: selectedPump?.id || '',
-        product_id: selectedPump?.id || '',
-        opening_meter: selectedPump?.current_meter_reading?.toString() || '0',
-        closing_meter: '',
-        unit_price: '',
-        date: new Date().toISOString().split('T')[0],
-        calculated_amount: '0.00'
-      });
+      resetSalesForm();
       await loadDailyReport();
       await loadPumps();
     } catch (error: any) {
-      console.error('Failed to record sales:', error);
-      toast.error('Failed to record sale');
+      console.error('❌ Failed to record sales:', error);
+      handleApiError(error, 'Recording sale');
     } finally {
       setSubmitting(false);
     }
@@ -946,6 +1893,12 @@ export function MobileStationManagerDashboard() {
   const handleRecordExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.station_id) return;
+
+    const validationErrors = validateExpenseForm(expenseForm);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
+      return;
+    }
 
     setSubmitting(true);
     const expenseData = {
@@ -956,777 +1909,838 @@ export function MobileStationManagerDashboard() {
       expense_date: expenseForm.expense_date,
       type: expenseForm.type,
       notes: expenseForm.notes,
+      receipt_url: expenseForm.receipt_url,
       created_by: user.id,
       status: 'pending',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     };
 
     try {
       if (isOnline) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('expenses')
-          .insert([expenseData]);
+          .insert([expenseData])
+          .select()
+          .single();
 
         if (error) throw error;
 
-        toast.success('Expense recorded!');
+        toast.success('Expense recorded successfully!');
         setShowExpenseDialog(false);
-        setExpenseForm({
-          category: 'operational',
-          description: '',
-          amount: '',
-          expense_date: new Date().toISOString().split('T')[0],
-          type: 'operational',
-          notes: '',
-        });
+        resetExpenseForm();
         await loadExpenses();
         await loadDailyReport();
       } else {
         await offlineSync.addToQueue('create', 'expenses', expenseData);
         await updatePendingCount();
-        toast.success('Expense queued for sync');
+        toast.success('Expense queued for sync (offline mode)');
         setShowExpenseDialog(false);
-        setExpenseForm({
-          category: 'operational',
-          description: '',
-          amount: '',
-          expense_date: new Date().toISOString().split('T')[0],
-          type: 'operational',
-          notes: '',
-        });
+        resetExpenseForm();
       }
     } catch (error: any) {
       console.error('Failed to record expense:', error);
-      toast.error('Failed to record expense');
+      handleApiError(error, 'Recording expense');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const calculateSalesAmount = useCallback(() => {
-    if (!salesForm.opening_meter || !salesForm.closing_meter || !salesForm.product_id) {
-      return;
-    }
+  const handleUpdateExpenseStatus = async (expenseId: string, status: 'approved' | 'rejected') => {
+    try {
+      const { error } = await supabase
+        .from('expenses')
+        .update({ 
+          status, 
+          approved_by: user?.id,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', expenseId);
 
-    const opening = parseFloat(salesForm.opening_meter);
-    const closing = parseFloat(salesForm.closing_meter);
-    
-    if (isNaN(opening) || isNaN(closing)) {
-      return;
-    }
-    
-    if (closing < opening) {
-      return;
-    }
+      if (error) throw error;
 
-    const volume = closing - opening;
-    const price = getStationPrice(user?.station_id || '', salesForm.product_id) || 0;
-    const calculatedAmount = volume * price;
-    
-    setSalesForm(prev => ({
-      ...prev,
-      calculated_amount: calculatedAmount.toFixed(2)
-    }));
-  }, [salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id, user?.station_id, getStationPrice]);
-
-  // Sales calculation effect
-  useEffect(() => {
-    calculateSalesAmount();
-  }, [calculateSalesAmount]);
-
-  // Render content based on active tab
-  const renderDashboard = () => (
-    <div className="space-y-4">
-      {/* Pull to refresh */}
-      <PullToRefresh onRefresh={refreshAllData} refreshing={refreshing} />
-      
-      {/* Welcome card */}
-      <Card className="bg-gradient-to-r from-blue-600 to-blue-800 text-white">
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold">{station?.name || 'Station'}</h2>
-              <p className="text-sm opacity-90">Welcome back, {user?.name?.split(' ')[0] || 'Manager'}</p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-white border-white hover:bg-white/20"
-              onClick={refreshAllData}
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 gap-3">
-        <MobileStatCard
-          title="Today's Sales"
-          value={formatCurrency(dailyReport?.total_sales || 0)}
-          icon={DollarSign}
-          subtitle={`${dailyReport?.sales?.length || 0} transactions`}
-          onClick={() => setActiveTab('sales')}
-        />
-        <MobileStatCard
-          title="Expenses"
-          value={formatCurrency(dailyReport?.total_expenses || 0)}
-          icon={TrendingUp}
-          subtitle={`${expenses.length} records`}
-          onClick={() => setActiveTab('expenses')}
-        />
-        <MobileStatCard
-          title="Fuel Stock"
-          value={`${fuelStockCard.reduce((sum, item) => sum + (item.current_stock || 0), 0).toLocaleString()}L`}
-          icon={Database}
-          subtitle={`${fuelStockCard.length} products`}
-          onClick={() => setActiveTab('inventory')}
-        />
-        <MobileStatCard
-          title="Active Pumps"
-          value={pumps.length}
-          icon={Gauge}
-          subtitle={`${pumps.filter(p => p.status === 'active').length} active`}
-        />
-      </div>
-
-      {/* Current Prices */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Current Prices</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {pumpPrices.slice(0, 3).map((price) => (
-            <div key={price.product_id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-              <span className="font-medium">{price.product_type}</span>
-              <span className="font-bold text-green-600">
-                ₵{price.price_per_liter.toFixed(2)}
-              </span>
-            </div>
-          ))}
-          {pumpPrices.length === 0 && (
-            <p className="text-center text-gray-500 py-2">No prices available</p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Quick Actions */}
-      {mobileConfig.showQuickActions && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Quick Actions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-4 gap-2">
-              <MobileQuickAction
-                icon={ShoppingCart}
-                label="Record Sale"
-                onClick={() => setShowSalesDialog(true)}
-                variant="primary"
-              />
-              <MobileQuickAction
-                icon={Receipt}
-                label="Add Expense"
-                onClick={() => setShowExpenseDialog(true)}
-                variant="warning"
-              />
-              <MobileQuickAction
-                icon={Package}
-                label="Inventory"
-                onClick={() => setShowInventoryDialog(true)}
-                variant="success"
-              />
-              <MobileQuickAction
-                icon={ClipboardList}
-                label="More"
-                onClick={() => setShowQuickActions(true)}
-                variant="default"
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Recent Activity */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Recent Activity</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {expenses.slice(0, 3).map((expense) => (
-            <div key={expense.id} className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">{expense.description}</p>
-                <p className="text-xs text-gray-500">
-                  {new Date(expense.expense_date).toLocaleDateString()}
-                </p>
-              </div>
-              <span className="font-semibold">₵{expense.amount}</span>
-            </div>
-          ))}
-          {expenses.length === 0 && (
-            <p className="text-center text-gray-500 py-2">No recent activity</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderSales = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">Sales Management</h2>
-        <Button 
-          size="sm"
-          onClick={() => setShowSalesDialog(true)}
-          className="bg-blue-600 hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4 mr-1" />
-          New Sale
-        </Button>
-      </div>
-
-      {/* Pump Selection */}
-      <Card>
-        <CardContent className="p-4">
-          <Label className="mb-2 block">Select Pump</Label>
-          <div className="space-y-2">
-            {pumps.map((pump) => (
-              <button
-                key={pump.id}
-                onClick={() => {
-                  setSelectedPump(pump);
-                  setSalesForm(prev => ({
-                    ...prev,
-                    pump_id: pump.id,
-                    opening_meter: pump.current_meter_reading?.toString() || '0'
-                  }));
-                }}
-                className={`w-full p-3 rounded-lg text-left ${selectedPump?.id === pump.id ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 hover:bg-gray-100'}`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">{pump.name}</p>
-                    <p className="text-sm text-gray-600">
-                      Pump {pump.number} • {pump.fuel_type}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold">{pump.current_meter_reading || 0}L</p>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${pump.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                      {pump.status}
-                    </span>
-                  </div>
-                </div>
-              </button>
-            ))}
-            {pumps.length === 0 && (
-              <p className="text-center text-gray-500 py-4">No pumps configured</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recent Sales */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent Sales</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {dailyReport?.sales?.slice(0, 5).map((sale: any) => (
-            <div key={sale.id} className="p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">Sale #{sale.id?.slice(-6)}</p>
-                  <p className="text-xs text-gray-600">
-                    {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-green-600">₵{sale.total_amount?.toFixed(2) || '0.00'}</p>
-                  <p className="text-xs text-gray-600">
-                    {sale.closing_meter - sale.opening_meter}L
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderInventory = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">Inventory Management</h2>
-        <Button 
-          size="sm"
-          onClick={() => setShowInventoryDialog(true)}
-          className="bg-green-600 hover:bg-green-700"
-        >
-          <Plus className="w-4 h-4 mr-1" />
-          Update Stock
-        </Button>
-      </div>
-
-      {/* Current Stock */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Current Stock Levels</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {fuelStockCard.map((item) => (
-            <div key={item.product_id} className="p-4 bg-gray-50 rounded-xl">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="font-bold text-lg">{item.product_name}</p>
-                  <p className="text-sm text-gray-600">
-                    Last updated: {new Date(item.last_updated).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-2xl font-bold text-blue-600">
-                    {item.current_stock?.toLocaleString()}{item.unit}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-          {fuelStockCard.length === 0 && (
-            <p className="text-center text-gray-500 py-8">No stock data available</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderExpenses = () => (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">Expense Management</h2>
-        <Button 
-          size="sm"
-          onClick={() => setShowExpenseDialog(true)}
-          className="bg-orange-600 hover:bg-orange-700"
-        >
-          <Plus className="w-4 h-4 mr-1" />
-          Add Expense
-        </Button>
-      </div>
-
-      {/* Expense Summary */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="text-center mb-4">
-            <p className="text-sm text-gray-600">Total Expenses Today</p>
-            <p className="text-3xl font-bold text-gray-900">
-              ₵{(dailyReport?.total_expenses || 0).toFixed(2)}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recent Expenses */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Recent Expenses</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {expenses.map((expense) => (
-            <div key={expense.id} className="p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <p className="font-medium capitalize">{expense.category}</p>
-                  <p className="text-sm text-gray-600">{expense.description}</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-red-600">₵{expense.amount}</p>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    expense.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                    expense.status === 'approved' ? 'bg-green-100 text-green-800' :
-                    'bg-red-100 text-red-800'
-                  }`}>
-                    {expense.status}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between text-xs text-gray-500">
-                <span>{new Date(expense.expense_date).toLocaleDateString()}</span>
-              </div>
-            </div>
-          ))}
-          {expenses.length === 0 && (
-            <p className="text-center text-gray-500 py-8">No expenses recorded</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  const renderMore = () => (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold">More Options</h2>
-      
-      {/* Sync Status */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              {isOnline ? (
-                <>
-                  <Wifi className="w-5 h-5 text-green-600" />
-                  <span className="font-medium">Online</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-5 h-5 text-orange-600" />
-                  <span className="font-medium">Offline</span>
-                </>
-              )}
-            </div>
-            {pendingSync > 0 && (
-              <Button 
-                size="sm" 
-                onClick={syncOfflineData}
-                variant="outline"
-                className="gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Sync ({pendingSync})
-              </Button>
-            )}
-          </div>
-          
-          <div className="space-y-3">
-            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
-              <div className="flex items-center gap-3">
-                <Settings className="w-5 h-5" />
-                <span>Settings</span>
-              </div>
-            </button>
-            
-            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
-              <div className="flex items-center gap-3">
-                <Bell className="w-5 h-5" />
-                <span>Notifications</span>
-              </div>
-            </button>
-            
-            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
-              <div className="flex items-center gap-3">
-                <Download className="w-5 h-5" />
-                <span>Export Reports</span>
-              </div>
-            </button>
-            
-            <button className="w-full p-3 bg-gray-50 rounded-lg text-left hover:bg-gray-100 active:bg-gray-200">
-              <div className="flex items-center gap-3">
-                <History className="w-5 h-5" />
-                <span>View History</span>
-              </div>
-            </button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  // Render content based on active tab
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return renderDashboard();
-      case 'sales':
-        return renderSales();
-      case 'inventory':
-        return renderInventory();
-      case 'expenses':
-        return renderExpenses();
-      case 'more':
-        return renderMore();
-      default:
-        return renderDashboard();
+      toast.success(`Expense ${status} successfully`);
+      await loadExpenses();
+    } catch (error: any) {
+      console.error('Failed to update expense:', error);
+      handleApiError(error, 'Updating expense status');
     }
   };
 
+  const handleDeleteExpense = async (expenseId: string) => {
+    if (!confirm('Are you sure you want to delete this expense?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('id', expenseId);
+
+      if (error) throw error;
+
+      toast.success('Expense deleted successfully');
+      await loadExpenses();
+    } catch (error: any) {
+      console.error('Failed to delete expense:', error);
+      handleApiError(error, 'Deleting expense');
+    }
+  };
+
+  const handleInventory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    const validationErrors = validateInventoryForm(inventoryForm);
+    if (validationErrors.length > 0) {
+      validationErrors.forEach(error => toast.error(error));
+      return;
+    }
+
+    setSubmitting(true);
+    
+    const inventoryData = {
+      station_id: user.station_id,
+      product_id: inventoryForm.product_id,
+      opening_stock: parseFloat(inventoryForm.opening_stock) || 0,
+      closing_stock: parseFloat(inventoryForm.closing_stock) || 0,
+      received: parseFloat(inventoryForm.received) || 0,
+      stock_date: inventoryForm.date,
+      recorded_by: user.id,
+      notes: "Daily inventory record",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    console.log('Inserting inventory data:', inventoryData);
+
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('daily_tank_stocks')
+          .insert([inventoryData]);
+
+        if (error) {
+          console.error('Supabase error:', error);
+          throw error;
+        }
+        
+        toast.success('Inventory recorded successfully!');
+        setShowInventoryDialog(false);
+        resetInventoryForm();
+        await loadDailyReport();
+        await loadInventoryHistory();
+        await loadFuelStockCard();
+      } else {
+        await offlineSync.addToQueue('create', 'daily_tank_stocks', inventoryData);
+        await updatePendingCount();
+        toast.success('Inventory queued for sync (offline mode)');
+        setShowInventoryDialog(false);
+        resetInventoryForm();
+      }
+    } catch (error: any) {
+      console.error('Failed to record inventory:', error);
+      handleApiError(error, 'Recording inventory');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleStationCheck = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const checkData = {
+      station_id: user.station_id,
+      check_type: stationCheckForm.check_type,
+      safety_equipment: stationCheckForm.safety_equipment,
+      cleanliness: stationCheckForm.cleanliness,
+      equipment_functional: stationCheckForm.equipment_functional,
+      notes: stationCheckForm.notes,
+      check_date: stationCheckForm.date,
+      created_by: user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('station_checks')
+          .insert([checkData]);
+
+        if (error) throw error;
+        toast.success('Station check recorded successfully!');
+      } else {
+        await offlineSync.addToQueue('create', 'station_checks', checkData);
+        await updatePendingCount();
+        toast.success('Station check queued for sync (offline mode)');
+      }
+      
+      setShowStationCheckDialog(false);
+      resetStationCheckForm();
+    } catch (error: any) {
+      console.error('Failed to record station check:', error);
+      handleApiError(error, 'Recording station check');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTankDipping = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const dippingData = {
+      station_id: user.station_id,
+      tank_number: tankDippingForm.tank_number,
+      product_id: tankDippingForm.product_id,
+      dip_reading: parseFloat(tankDippingForm.dip_reading),
+      water_level: parseFloat(tankDippingForm.water_level) || 0,
+      temperature: parseFloat(tankDippingForm.temperature) || 0,
+      dipping_date: tankDippingForm.date,
+      dipping_time: tankDippingForm.time,
+      created_by: user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      if (isOnline) {
+        const { error } = await supabase
+          .from('tank_dippings')
+          .insert([dippingData]);
+
+        if (error) throw error;
+        toast.success('Tank dipping recorded successfully!');
+      } else {
+        await offlineSync.addToQueue('create', 'tank_dippings', dippingData);
+        await updatePendingCount();
+        toast.success('Tank dipping queued for sync (offline mode)');
+      }
+      
+      setShowTankDippingDialog(false);
+      resetTankDippingForm();
+    } catch (error: any) {
+      console.error('Failed to record tank dipping:', error);
+      handleApiError(error, 'Recording tank dipping');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleAddBank = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.station_id) return;
+
+    setSubmitting(true);
+    const bankData = {
+      station_id: user.station_id,
+      name: bankForm.name,
+      account_number: bankForm.account_number,
+      branch: bankForm.branch,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from('banks')
+        .insert([bankData])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      toast.success('Bank added successfully!');
+      setShowBankDialog(false);
+      resetBankForm();
+      await loadBanks();
+    } catch (error: any) {
+      console.error('Failed to add bank:', error);
+      handleApiError(error, 'Adding bank');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const resetSalesForm = () => {
+    if (selectedPump) {
+      const matchingProduct = products.find(p => 
+        p.name.toLowerCase() === selectedPump.fuel_type?.toLowerCase()
+      );
+      
+      const currentPrice = getStationPrice(user?.station_id || '', matchingProduct?.id || '') || 0;
+      
+      setSalesForm({
+        pump_id: selectedPump.id,
+        product_type: selectedPump.fuel_type || 'Petrol',
+        product_id: matchingProduct?.id || '',
+        opening_meter: selectedPump.current_meter_reading?.toString() || '0',
+        closing_meter: '',
+        unit_price: currentPrice.toString(),
+        date: new Date().toISOString().split('T')[0],
+        calculated_amount: '0.00'
+      });
+    } else {
+      const defaultProduct = products[0];
+      const currentPrice = getStationPrice(user?.station_id || '', defaultProduct?.id || '') || 0;
+      setSalesForm({
+        pump_id: '',
+        product_type: defaultProduct?.name || 'Petrol',
+        product_id: defaultProduct?.id || '',
+        opening_meter: '',
+        closing_meter: '',
+        unit_price: currentPrice.toString(),
+        date: new Date().toISOString().split('T')[0],
+        calculated_amount: '0.00'
+      });
+    }
+  };
+
+  const resetExpenseForm = () => {
+    setExpenseForm({
+      category: 'operational',
+      description: '',
+      amount: '',
+      expense_date: new Date().toISOString().split('T')[0],
+      type: 'operational',
+      notes: '',
+      receipt_url: ''
+    });
+  };
+
+  const resetInventoryForm = () => {
+    const defaultProduct = products[0];
+    setInventoryForm({
+      product_type: defaultProduct?.name || 'Petrol',
+      product_id: defaultProduct?.id || '',
+      opening_stock: '',
+      received: '',
+      closing_stock: '',
+      date: new Date().toISOString().split('T')[0]
+    });
+  };
+
+  const resetTankDippingForm = () => {
+    const defaultProduct = products[0];
+    setTankDippingForm({
+      tank_number: '1',
+      product_type: defaultProduct?.name || 'Petrol',
+      product_id: defaultProduct?.id || '',
+      dip_reading: '',
+      water_level: '',
+      temperature: '',
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toTimeString().split(' ')[0].substring(0, 5)
+    });
+  };
+
+  const resetStationCheckForm = () => {
+    setStationCheckForm({
+      check_type: 'Opening',
+      safety_equipment: true,
+      cleanliness: true,
+      equipment_functional: true,
+      notes: '',
+      date: new Date().toISOString().split('T')[0]
+    });
+  };
+
+  const resetBankForm = () => {
+    setBankForm({
+      name: '',
+      account_number: '',
+      branch: '',
+      is_active: true
+    });
+  };
+
+  const debugPumpsTable = async () => {
+    if (!user?.station_id) return;
+    
+    try {
+      console.log('🔍 Debugging pumps table...');
+      
+      const { data, error } = await supabase
+        .from('pumps')
+        .select('*')
+        .eq('station_id', user.station_id)
+        .limit(5);
+
+      if (error) {
+        console.error('❌ Debug query error:', error);
+        toast.error(`Pumps table error: ${error.message}`);
+        return;
+      }
+
+      console.log('🔍 Pumps table sample data:', data);
+      
+      if (data && data.length > 0) {
+        toast.success(`Found ${data.length} pumps. Check console for details.`);
+      } else {
+        toast.info('No pumps found for this station. Please add pumps first.');
+      }
+    } catch (error: any) {
+      console.error('❌ Debug failed:', error);
+      toast.error('Debug failed: ' + error.message);
+    }
+  };
+
+  // Effects (keep same as before)
+  useEffect(() => {
+    if (initializedRef.current || !user?.station_id) return;
+    
+    initializedRef.current = true;
+    console.log('🚀 StationManagerDashboard: Initializing...');
+
+    const initializeDashboard = async () => {
+      try {
+        await offlineSync.init();
+        await loadStation();
+        await loadProducts();
+        await loadPumps();
+        await loadBanks();
+        await loadPumpPrices(true);
+        await loadInventoryHistory();
+        await loadFuelStockCard();
+        await loadExpenses();
+        await loadDailyReport();
+        await updatePendingCount();
+        
+        console.log('✅ StationManagerDashboard: Initialized successfully');
+      } catch (error) {
+        console.error('💥 StationManagerDashboard: Failed to initialize:', error);
+        toast.error('Failed to initialize dashboard');
+      }
+    };
+
+    initializeDashboard();
+
+    if (dashboardConfig.autoRefresh) {
+      syncIntervalRef.current = setInterval(() => {
+        if (isOnline && pendingSync > 0) {
+          syncOfflineData();
+        }
+      }, dashboardConfig.refreshInterval);
+    }
+
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+      }
+    };
+  }, [user?.station_id, dashboardConfig.autoRefresh, dashboardConfig.refreshInterval]);
+
+  useEffect(() => {
+    if (!user?.station_id) return;
+
+    if (realtimeSubscriptionRef.current) {
+      realtimeSubscriptionRef.current.unsubscribe();
+    }
+
+    realtimeSubscriptionRef.current = supabase
+      .channel('station-dashboard')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales',
+          filter: `station_id=eq.${user.station_id}`
+        },
+        () => {
+          loadDailyReport();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'expenses',
+          filter: `station_id=eq.${user.station_id}`
+        },
+        () => {
+          loadExpenses();
+          loadDailyReport();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (realtimeSubscriptionRef.current) {
+        realtimeSubscriptionRef.current.unsubscribe();
+      }
+    };
+  }, [user?.station_id]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      if (pendingSync > 0) {
+        syncOfflineData();
+      }
+    };
+    
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncOfflineData, pendingSync]);
+
+  useEffect(() => {
+    if (salesForm.opening_meter && salesForm.closing_meter && salesForm.product_id) {
+      calculateSalesAmount(salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id);
+    }
+  }, [salesForm.opening_meter, salesForm.closing_meter, salesForm.product_id, calculateSalesAmount]);
+
+  useEffect(() => {
+    if (selectedPump) {
+      const matchingProduct = products.find(p => 
+        p.name.toLowerCase() === selectedPump.fuel_type?.toLowerCase()
+      );
+      
+      const currentPrice = getStationPrice(user?.station_id || '', matchingProduct?.id || '') || 0;
+      
+      setSalesForm(currentForm => {
+        const updatedForm = {
+          ...currentForm,
+          pump_id: selectedPump.id,
+          product_type: selectedPump.fuel_type || 'Petrol',
+          product_id: matchingProduct?.id || '',
+          opening_meter: selectedPump.current_meter_reading?.toString() || '0',
+          unit_price: currentPrice.toString()
+        };
+        
+        if (currentForm.closing_meter) {
+          const opening = parseFloat(selectedPump.current_meter_reading?.toString() || '0');
+          const closing = parseFloat(currentForm.closing_meter);
+          if (!isNaN(opening) && !isNaN(closing) && closing >= opening) {
+            const volume = closing - opening;
+            const calculatedAmount = volume * currentPrice;
+            updatedForm.calculated_amount = calculatedAmount.toFixed(2);
+          }
+        }
+        
+        return updatedForm;
+      });
+    }
+  }, [selectedPump, user?.station_id, getStationPrice, products]);
+
+  if (isLoading() && !dailyReport) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-8 w-8 rounded-full" />
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-24 rounded-xl" />
+            ))}
+          </div>
+          <Skeleton className="h-64 w-full rounded-xl mb-4" />
+          <Skeleton className="h-64 w-full rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 pb-16 safe-area-padding">
-      {/* Status Bar */}
-      <MobileStatusBar 
-        isOnline={isOnline} 
+    <div className="min-h-screen bg-gray-50 pb-16">
+      <MobileHeader
+        station={station}
+        isOnline={isOnline}
         pendingSync={pendingSync}
-        batteryLevel={batteryLevel}
-        isCharging={isCharging}
+        onMenuPress={() => setShowMobileMenu(true)}
+        onSyncPress={syncOfflineData}
+        onRefreshPress={async () => {
+          await loadDailyReport();
+          await loadPumpPrices(true);
+          await loadFuelStockCard();
+          await loadPumps();
+        }}
+        isLoading={isLoading()}
       />
 
-      {/* Main Content */}
-      <div className="px-4 py-4">
-        {renderContent()}
+      <MobileTabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      <div className="pb-20">
+        {activeTab === 'operations' && (
+          <>
+            <MobileStatsCard
+              dailyReport={dailyReport}
+              expenseStats={expenseStats}
+              fuelStockCard={fuelStockCard}
+              pumps={pumps}
+            />
+            
+            <MobilePumpPrices
+              pumpPrices={pumpPrices}
+              loading={loadingStates.prices}
+              onRefresh={() => loadPumpPrices(true)}
+            />
+            
+            <MobileSalesCard
+              dailyReport={dailyReport}
+              onRecordSale={() => setShowSalesDialog(true)}
+              onDebugPumps={debugPumpsTable}
+            />
+            
+            <MobileExpensesCard
+              expenses={expenses}
+              searchTerm={searchTerm}
+              filterStatus={filterStatus}
+              onSearchChange={setSearchTerm}
+              onFilterChange={setFilterStatus}
+              onAddExpense={() => setShowExpenseDialog(true)}
+              onUpdateStatus={handleUpdateExpenseStatus}
+              onDelete={handleDeleteExpense}
+            />
+            
+            <MobileQuickActions
+              onStationCheck={() => setShowStationCheckDialog(true)}
+              onTankDipping={() => setShowTankDippingDialog(true)}
+              onInventory={() => setShowInventoryDialog(true)}
+              onExpense={() => setShowExpenseDialog(true)}
+            />
+          </>
+        )}
+
+        {activeTab === 'financial' && (
+          <div className="px-4 mt-4">
+            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
+              <LazyBankDeposits 
+                stationId={user?.station_id || ''} 
+                banks={banks}
+                onBankAdded={loadBanks}
+                showAddBank={true}
+              />
+            </Suspense>
+          </div>
+        )}
+
+        {activeTab === 'inventory' && (
+          <div className="px-4 mt-4 space-y-4">
+            {/* Current Stock */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Current Stock</h3>
+              <div className="space-y-3">
+                {fuelStockCard.map((item) => (
+                  <div key={item.product_id} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
+                        <p className="text-xs text-gray-600">
+                          Updated: {new Date(item.last_updated).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-bold text-blue-600">
+                          {item.current_stock?.toLocaleString()}{item.unit}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {fuelStockCard.length === 0 && (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-gray-500">No stock data available</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Inventory History */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-900">Recent Stock History</h3>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setShowInventoryDialog(true)}
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Add
+                </Button>
+              </div>
+              <div className="space-y-3">
+                {inventoryHistory.slice(0, 3).map((item) => (
+                  <div key={item.id} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{item.products?.name || 'Unknown'}</p>
+                        <p className="text-xs text-gray-600">
+                          {new Date(item.stock_date).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm text-gray-600">O: {item.opening_stock}L</p>
+                        <p className="text-sm text-gray-600">R: {item.received}L</p>
+                        <p className="text-sm font-semibold text-gray-900">C: {item.closing_stock}L</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {inventoryHistory.length === 0 && (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-gray-500">No inventory history</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'equipment' && (
+          <div className="px-4 mt-4">
+            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
+              <LazyPumpCalibration 
+                stationId={user?.station_id || ''} 
+                pumps={pumps}
+              />
+            </Suspense>
+          </div>
+        )}
+
+        {activeTab === 'reports' && (
+          <div className="px-4 mt-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Export Reports</h3>
+              <div className="space-y-3">
+                <Button 
+                  className="w-full h-12" 
+                  variant="outline"
+                  onClick={() => {
+                    if (dailyReport?.sales.length) {
+                      exportToCSV(dailyReport.sales, 'sales-report');
+                    } else {
+                      toast.error('No sales data to export');
+                    }
+                  }}
+                  disabled={!dailyReport?.sales.length}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Sales Report ({dailyReport?.sales.length || 0})
+                </Button>
+                <Button 
+                  className="w-full h-12" 
+                  variant="outline"
+                  onClick={() => {
+                    if (expenses.length) {
+                      exportToCSV(expenses, 'expenses-report');
+                    } else {
+                      toast.error('No expenses data to export');
+                    }
+                  }}
+                  disabled={!expenses.length}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Expense Report ({expenses.length})
+                </Button>
+                <Button 
+                  className="w-full h-12" 
+                  variant="outline"
+                  onClick={() => {
+                    if (inventoryHistory.length) {
+                      exportToCSV(inventoryHistory, 'inventory-report');
+                    } else {
+                      toast.error('No inventory data to export');
+                    }
+                  }}
+                  disabled={!inventoryHistory.length}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Inventory Report ({inventoryHistory.length})
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Dialogs */}
+      <MobileSalesDialog
+        open={showSalesDialog}
+        onOpenChange={setShowSalesDialog}
+        salesForm={salesForm}
+        setSalesForm={setSalesForm}
+        pumps={pumps}
+        selectedPump={selectedPump}
+        setSelectedPump={setSelectedPump}
+        products={products}
+        user={user}
+        getStationPrice={getStationPrice}
+        calculateSalesAmount={calculateSalesAmount}
+        handleRecordSales={handleRecordSales}
+        submitting={submitting}
+        debugPumpsTable={debugPumpsTable}
+      />
+
       {/* Bottom Navigation */}
-      <MobileBottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-around">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`flex flex-col items-center ${activeTab === 'operations' ? 'text-blue-600' : 'text-gray-600'}`}
+            onClick={() => setActiveTab('operations')}
+          >
+            <BarChart3 className="w-5 h-5" />
+            <span className="text-xs mt-1">Operations</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`flex flex-col items-center ${activeTab === 'financial' ? 'text-blue-600' : 'text-gray-600'}`}
+            onClick={() => setActiveTab('financial')}
+          >
+            <DollarSign className="w-5 h-5" />
+            <span className="text-xs mt-1">Finance</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`flex flex-col items-center ${activeTab === 'inventory' ? 'text-blue-600' : 'text-gray-600'}`}
+            onClick={() => setActiveTab('inventory')}
+          >
+            <Package className="w-5 h-5" />
+            <span className="text-xs mt-1">Stock</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`flex flex-col items-center ${activeTab === 'reports' ? 'text-blue-600' : 'text-gray-600'}`}
+            onClick={() => setActiveTab('reports')}
+          >
+            <Download className="w-5 h-5" />
+            <span className="text-xs mt-1">Reports</span>
+          </Button>
+        </div>
+      </div>
 
-      {/* Sales Dialog */}
-      <Dialog open={showSalesDialog} onOpenChange={setShowSalesDialog}>
-        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
-          <DialogHeader>
-            <DialogTitle className="text-lg">Record Sale</DialogTitle>
-            <DialogDescription>Enter pump meter readings</DialogDescription>
-          </DialogHeader>
-          
-          <form onSubmit={handleRecordSales} className="space-y-4">
-            {selectedPump && (
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <p className="font-medium text-blue-800">Pump: {selectedPump.name}</p>
-                <p className="text-sm text-blue-600">Current: {selectedPump.current_meter_reading}L</p>
-              </div>
-            )}
-            
-            <div className="space-y-3">
-              <div>
-                <Label>Opening Meter (L)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={salesForm.opening_meter}
-                  onChange={(e) => setSalesForm({ ...salesForm, opening_meter: e.target.value })}
-                  placeholder="0.00"
-                  required
-                  className="text-lg"
-                />
-              </div>
-              
-              <div>
-                <Label>Closing Meter (L)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={salesForm.closing_meter}
-                  onChange={(e) => setSalesForm({ ...salesForm, closing_meter: e.target.value })}
-                  placeholder="0.00"
-                  required
-                  className="text-lg"
-                />
-              </div>
-              
-              {salesForm.calculated_amount !== '0.00' && (
-                <div className="p-3 bg-green-50 rounded-lg">
-                  <p className="text-sm text-green-800">Amount to collect:</p>
-                  <p className="text-xl font-bold text-green-700">₵{salesForm.calculated_amount}</p>
-                </div>
-              )}
-            </div>
-            
-            <DialogFooter>
-              <Button
-                type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700"
-                disabled={submitting}
-              >
-                {submitting ? 'Recording...' : 'Record Sale'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Expense Dialog */}
-      <Dialog open={showExpenseDialog} onOpenChange={setShowExpenseDialog}>
-        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
-          <DialogHeader>
-            <DialogTitle className="text-lg">Add Expense</DialogTitle>
-          </DialogHeader>
-          
-          <form onSubmit={handleRecordExpense} className="space-y-4">
-            <div className="space-y-3">
-              <div>
-                <Label>Description</Label>
-                <Input
-                  value={expenseForm.description}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })}
-                  placeholder="What was this expense for?"
-                  required
-                />
-              </div>
-              
-              <div>
-                <Label>Amount (₵)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={expenseForm.amount}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
-                  placeholder="0.00"
-                  required
-                  className="text-lg"
-                />
-              </div>
-              
-              <div>
-                <Label>Category</Label>
-                <select
-                  className="w-full p-2 border rounded-lg"
-                  value={expenseForm.category}
-                  onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
-                >
-                  <option value="operational">Operational</option>
-                  <option value="maintenance">Maintenance</option>
-                  <option value="supplies">Supplies</option>
-                  <option value="staff">Staff</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-            </div>
-            
-            <DialogFooter>
-              <Button
-                type="submit"
-                className="w-full bg-orange-600 hover:bg-orange-700"
-                disabled={submitting}
-              >
-                {submitting ? 'Saving...' : 'Save Expense'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Inventory Dialog */}
-      <Dialog open={showInventoryDialog} onOpenChange={setShowInventoryDialog}>
-        <DialogContent className="max-w-[95vw] bg-white p-4 rounded-2xl mx-2">
-          <DialogHeader>
-            <DialogTitle className="text-lg">Update Inventory</DialogTitle>
-          </DialogHeader>
-          
-          <form onSubmit={handleRecordExpense} className="space-y-4">
-            <div className="space-y-3">
-              <div>
-                <Label>Product</Label>
-                <select
-                  className="w-full p-2 border rounded-lg"
-                  value={inventoryForm.product_id}
-                  onChange={(e) => setInventoryForm({ ...inventoryForm, product_id: e.target.value })}
-                  required
-                >
-                  <option value="">Select product</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label>Opening Stock</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={inventoryForm.opening_stock}
-                    onChange={(e) => setInventoryForm({ ...inventoryForm, opening_stock: e.target.value })}
-                    placeholder="0.00"
-                  />
-                </div>
-                
-                <div>
-                  <Label>Received</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={inventoryForm.received}
-                    onChange={(e) => setInventoryForm({ ...inventoryForm, received: e.target.value })}
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <Label>Closing Stock</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={inventoryForm.closing_stock}
-                  onChange={(e) => setInventoryForm({ ...inventoryForm, closing_stock: e.target.value })}
-                  placeholder="0.00"
-                  required
-                />
-              </div>
-            </div>
-            
-            <DialogFooter>
-              <Button
-                type="submit"
-                className="w-full bg-green-600 hover:bg-green-700"
-                disabled={submitting}
-              >
-                {submitting ? 'Saving...' : 'Update Inventory'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Quick Actions Sheet */}
-      <Sheet open={showQuickActions} onOpenChange={setShowQuickActions}>
-        <SheetContent side="bottom" className="rounded-t-2xl">
-          <SheetHeader>
-            <SheetTitle>Quick Actions</SheetTitle>
-          </SheetHeader>
-          <div className="grid grid-cols-3 gap-3 py-4">
-            <MobileQuickAction
-              icon={Building2}
-              label="Station Check"
-              onClick={() => {}}
-              variant="default"
-            />
-            <MobileQuickAction
-              icon={Fuel}
-              label="Tank Dipping"
-              onClick={() => {}}
-              variant="default"
-            />
-            <MobileQuickAction
-              icon={Calculator}
-              label="Calculators"
-              onClick={() => {}}
-              variant="default"
-            />
-            <MobileQuickAction
-              icon={ClipboardList}
-              label="Daily Report"
-              onClick={() => {}}
-              variant="default"
-            />
-            <MobileQuickAction
-              icon={Users}
-              label="Staff Management"
-              onClick={() => {}}
-              variant="default"
-            />
-            <MobileQuickAction
-              icon={BarChart}
-              label="Analytics"
-              onClick={() => {}}
-              variant="default"
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* Notifications Sheet */}
-      <Sheet open={showNotifications} onOpenChange={setShowNotifications}>
-        <SheetContent side="right" className="w-full max-w-sm">
-          <SheetHeader>
-            <SheetTitle>Notifications</SheetTitle>
-          </SheetHeader>
-          <div className="py-4">
-            {/* Notifications content */}
-          </div>
-        </SheetContent>
-      </Sheet>
+      <MobileSideMenu
+        show={showMobileMenu}
+        onClose={() => setShowMobileMenu(false)}
+        station={station}
+        user={user}
+        onNavigate={(path) => {
+          console.log('Navigate to:', path);
+          // Implement navigation logic here
+        }}
+      />
     </div>
   );
 }
