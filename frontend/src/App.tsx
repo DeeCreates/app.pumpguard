@@ -235,13 +235,12 @@ const SuspenseLoader: React.FC<{ children: React.ReactNode }> = ({ children }) =
   </Suspense>
 );
 
-// 🚀 Main app content - COMPLETELY FIXED
+// 🚀 Main app content - FIXED LOGOUT
 const AppContent: React.FC = () => {
-  const { user, isLoading, isDataLoading, isSetupComplete, error, logout } = useAuth();
+  const { user, isLoading, isDataLoading, isSetupComplete, error } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
   const [initialLoad, setInitialLoad] = useState(true);
-  const [isRedirecting, setIsRedirecting] = useState(false);
 
   useEffect(() => {
     // Hide initial loader after app is ready
@@ -253,45 +252,12 @@ const AppContent: React.FC = () => {
     }
   }, [isLoading, user]);
 
-  // 🚀 CRITICAL FIX: Handle logout redirect without flash
-  useEffect(() => {
-    // Check if we're in a logout redirect state
-    const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
-    
-    if (isLogoutRedirect && !user && !isLoading) {
-      console.log("🚀 Handling logout redirect");
-      setIsRedirecting(true);
-      
-      // Clear the flag
-      sessionStorage.removeItem('logout_redirect');
-      
-      // Use setTimeout to ensure React finishes rendering before redirect
-      const timer = setTimeout(() => {
-        window.location.href = "/login";
-      }, 50);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [user, isLoading]);
-
-  // 🚀 Auto-redirect for unauthenticated users
-  useEffect(() => {
-    if (!isLoading && !user && !window.location.pathname.includes('/login') && 
-        !window.location.pathname.includes('/welcome') && 
-        !window.location.pathname.includes('/setup') &&
-        !window.location.pathname.includes('/verify/report')) {
-      console.log("🔄 No user found, redirecting to /login");
-      setIsRedirecting(true);
-      window.location.href = '/login';
-    }
-  }, [isLoading, user]);
-
   // Show initial app loader
-  if (initialLoad || isRedirecting) {
+  if (initialLoad) {
     return (
       <LoaderScreen 
-        message={isRedirecting ? "Redirecting..." : "Launching PumpGuard..."}
-        subMessage={isRedirecting ? "Please wait..." : "Initializing your session"}
+        message="Launching PumpGuard..."
+        subMessage="Initializing your session"
       />
     );
   }
