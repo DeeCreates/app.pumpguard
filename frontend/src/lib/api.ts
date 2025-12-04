@@ -15141,6 +15141,198 @@ private isToday(dateString: string): boolean {
   return dateString === today;
 }
 
+// ===== DAILY REPORTS METHODS =====
+
+  /**
+   * Get daily reports with filtering and joins
+   */
+  async getDailyReports(filters: {
+    station_id?: string;
+    status?: string;
+    shift?: string;
+    date_from?: string;
+    date_to?: string;
+    search?: string;
+  }, user: any): Promise<APIResponse> {
+    try {
+      let query = supabase
+        .from('daily_reports')
+        .select(`
+          *,
+          stations (name, code, dealer_commission_rate),
+          submitted_user:profiles!daily_reports_submitted_by_fkey (full_name),
+          approved_user:profiles!daily_reports_approved_by_fkey (full_name)
+        `)
+        .order('report_date', { ascending: false });
+
+      // Apply role-based filtering
+      if (user.role !== 'admin') {
+        // Get user's accessible stations
+        const { data: userStations } = await supabase
+          .from('stations')
+          .select('id')
+          .or(`dealer_id.eq.${user.id},manager_id.eq.${user.id},omc_id.eq.${user.id}`);
+        
+        if (userStations && userStations.length > 0) {
+          const stationIds = userStations.map(s => s.id);
+          query = query.in('station_id', stationIds);
+        } else {
+          return {
+            success: true,
+            data: []
+          };
+        }
+      }
+
+      // Apply custom filters
+      if (filters.station_id && filters.station_id !== 'all') {
+        query = query.eq('station_id', filters.station_id);
+      }
+      if (filters.status && filters.status !== 'all') {
+        query = query.eq('status', filters.status);
+      }
+      if (filters.shift && filters.shift !== 'all') {
+        query = query.eq('shift', filters.shift);
+      }
+      if (filters.date_from) {
+        query = query.gte('report_date', filters.date_from);
+      }
+      if (filters.date_to) {
+        query = query.lte('report_date', filters.date_to);
+      }
+      if (filters.search) {
+        query = query.or(`stations.name.ilike.%${filters.search}%,notes.ilike.%${filters.search}%`);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        return {
+          success: false,
+          error: extractErrorMessage(error)
+        };
+      }
+
+      return {
+        success: true,
+        data
+      };
+
+    } catch (error: unknown) {
+      return {
+        success: false,
+        error: 'Failed to fetch daily reports: ' + extractErrorMessage(error)
+      };
+    }
+  }
+
+  /**
+   * Create a new daily report
+   */
+  async createDailyReport(reportData: {
+    station_id: string;
+    report_date: string;
+    shift: 'morning' | 'afternoon' | 'night';
+    total_fuel_sold: number;
+    total_sales: number;
+    cash_collected: number;
+    bank_deposits: number;
+    total_expenses: number;
+    variance: number;
+    dealer_commission: number;
+    commission_paid: boolean;
+    net_amount: number;
+    status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'paid';
+    notes?: string;
+    submitted_by: string;
+    submitted_at?: string;
+  }): Promise<APIResponse> {
+    try {
+      // Check if report already exists for same date/shift
+      const { data: existingReport } = await supabase
+        .from('daily_reports')
+        .select('id')
+        .eq('station_id', reportData.station_id)
+        .eq('report_date', reportData.report_date)
+        .eq('shift', reportData.shift)
+        .single();
+
+      if (existingReport) {
+        return {
+          success: false,
+          error: 'A report already exists for this date and shift'
+        };
+      }
+
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .insert([reportData])
+        .select()
+        .single();
+
+      if (error) {
+        return {
+          success: false,
+          error: extractErrorMessage(error)
+        };
+      }
+
+      return {
+        success: true,
+        data
+      };
+
+    } catch (error: unknown) {
+      return {
+        success: false,
+        error: 'Failed to create daily report: ' + extractErrorMessage(error)
+      };
+    }
+  }
+
+  /**
+   * Update report status (approve/reject/mark paid)
+   */
+  async updateDailyReportStatus(
+    reportId: string,
+    updateData: {
+      status: 'approved' | 'rejected' | 'paid';
+      approved_by?: string;
+      approved_at?: string;
+      commission_paid?: boolean;
+      paid_by?: string;
+      paid_at?: string;
+    }
+  ): Promise<APIResponse> {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .update(updateData)
+        .eq('id', reportId)
+        .select()
+        .single();
+
+      if (error) {
+        return {
+          success: false,
+          error: extractErrorMessage(error)
+        };
+      }
+
+      return {
+        success: true,
+        data
+      };
+
+    } catch (error: unknown) {
+      return {
+        success: false,
+        error: 'Failed to update report status: ' + extractErrorMessage(error)
+      };
+    }
+  }
+
+
 // ===== USER MANAGEMENT METHODS =====
 
 /**

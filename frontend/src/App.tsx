@@ -72,6 +72,9 @@ import AnalyticsDashboard from "./pages/reports/AnalyticsDashboard";
 import DailyReports from "./pages/reports/DailyReports";
 import SalesReports from "./pages/reports/SalesReports";
 
+// Verification
+import ReportVerification from "./pages/verify/report"; // ADDED
+
 // Settings
 import Settings from "./pages/settings/Settings";
 import Profile from "./pages/settings/Profile";
@@ -207,7 +210,7 @@ const DashboardRouter: React.FC = () => {
       default: return (
         <LoaderScreen 
           message="Preparing Mobile View..."
-          subDescription="Setting up your mobile interface"
+          subMessage="Setting up your mobile interface"
         />
       );
     }
@@ -258,12 +261,13 @@ const SuspenseLoader: React.FC<{ children: React.ReactNode }> = ({ children }) =
   </Suspense>
 );
 
-// 🚀 Main app content
+// 🚀 Main app content - UPDATED WITH LOGOUT FLASH FIX
 const AppContent: React.FC = () => {
   const { user, isLoading, isDataLoading, isSetupComplete, error } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
   const [initialLoad, setInitialLoad] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     // Hide initial loader after app is ready
@@ -274,6 +278,14 @@ const AppContent: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [isLoading, user]);
+
+  const handleManualLogout = () => {
+    setIsLoggingOut(true);
+    const timeout = setTimeout(() => {
+      setIsLoggingOut(false);
+    }, 1000);
+    return () => clearTimeout(timeout);
+  };
 
   // Show initial app loader
   if (initialLoad) {
@@ -332,6 +344,7 @@ const AppContent: React.FC = () => {
                 localStorage.removeItem("pumpguard_offline_user");
                 localStorage.removeItem("pumpguard_offline_email");
                 localStorage.removeItem("pumpguard-session");
+                localStorage.removeItem("supabase_last_refresh");
                 window.location.href = "/login";
               }}
               className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
@@ -345,7 +358,7 @@ const AppContent: React.FC = () => {
   }
 
   // ✅ Authenticated user: show full app
-  if (user) {
+  if (user && !isLoggingOut) {
     // Choose layout based on device
     const Layout = isMobile ? MobileLayout : DesktopLayout;
     
@@ -363,6 +376,13 @@ const AppContent: React.FC = () => {
             {/* Dashboard */}
             <Route path="/" element={<DashboardRouter />} />
             <Route path="/dashboard" element={<DashboardRouter />} />
+
+            {/* Verification Route - ADDED */}
+            <Route path="/verify/report" element={
+              <SuspenseLoader>
+                <ReportVerification />
+              </SuspenseLoader>
+            } />
 
             {/* User Management */}
             <Route path="/users" element={
@@ -462,7 +482,7 @@ const AppContent: React.FC = () => {
               </SuspenseLoader>
             } />
             
-            {/* ✅ SINGLE COMMISSION PAGE - Everything in one file */}
+            {/* ✅ SINGLE COMMISSION PAGE */}
             <Route 
               path="/commission" 
               element={
@@ -587,6 +607,15 @@ const AppContent: React.FC = () => {
   }
 
   // 🧭 Auth flow for unauthenticated users
+  if (isLoggingOut) {
+    return (
+      <LoaderScreen 
+        message="Logging out..."
+        subMessage="Please wait while we sign you out"
+      />
+    );
+  }
+  
   console.log("👤 User not authenticated, showing auth flow");
   
   return (
@@ -596,6 +625,7 @@ const AppContent: React.FC = () => {
         <Route path="/welcome" element={<Welcome isSetupComplete={isSetupComplete} />} />
         <Route path="/login" element={<Login />} />
         <Route path="/setup" element={<SetupWizard onComplete={() => window.location.reload()} />} />
+        <Route path="/verify/report" element={<ReportVerification />} /> {/* ADDED for public access */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </div>
@@ -607,7 +637,6 @@ const App: React.FC = () => {
   const [appLoading, setAppLoading] = useState(true);
 
   useEffect(() => {
-    // Show initial loader for a minimum time for better UX
     const timer = setTimeout(() => {
       setAppLoading(false);
     }, 2000);
