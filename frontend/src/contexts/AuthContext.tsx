@@ -574,29 +574,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, refreshData, toast]);
 
   // ==================== FIXED LOGOUT FUNCTION - NO FLASH ====================
-  const logout = useCallback(async () => {
-    // Clear any existing timeout
-    if (logoutTimeoutRef.current) {
-      clearTimeout(logoutTimeoutRef.current);
-    }
-
-    try {
-      console.log("🚪 Starting instant logout...");
-      
-      // 🚀 CRITICAL: Set logging out state IMMEDIATELY
-      // This prevents App.tsx from rendering Welcome page
-      setIsLoggingOut(true);
-      
-      // 1️⃣ Set flag to prevent auth listener from interfering
-      sessionStorage.setItem('manual_logout', 'true');
-      
-      // 2️⃣ Clear ALL local state
+const logout = useCallback(async () => {
+  try {
+    console.log("🚪 Starting instant logout...");
+    
+    // 🚀 CRITICAL: Set flag for AppContent to handle redirect
+    sessionStorage.setItem('logout_redirect', 'true');
+    
+    // 🚀 IMMEDIATE redirect to prevent React render
+    window.location.href = "/login";
+    
+    // 🚀 Clean up in background (fire and forget)
+    setTimeout(() => {
+      // Clear all storage
       removeSession();
       localStorage.removeItem("pumpguard_offline_user");
       localStorage.removeItem("pumpguard_offline_email");
       localStorage.removeItem('supabase_last_refresh');
+      sessionStorage.removeItem('logout_redirect');
       
-      // Clear rate limits for this user
+      // Clear rate limits
       if (user?.email) {
         const emailKey = sanitizeEmail(user.email);
         ['login', 'forgot_password', 'password_reset'].forEach(type => {
@@ -604,36 +601,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
       }
       
-      // 3️⃣ Update UI state
-      setIsSetupComplete(false);
+      // Sign out from Supabase
+      supabase.auth.signOut().catch(() => {});
       
-      // 4️⃣ Show toast (but don't wait for it)
-      toast({
-        title: "Logged Out",
-        description: "You have been successfully logged out.",
-        duration: 2000,
-      });
-      
-      // 5️⃣ Sign out from Supabase in background (fire and forget)
-      setTimeout(() => {
-        supabase.auth.signOut().catch(() => {});
-      }, 100);
-      
-      // 6️⃣ Redirect IMMEDIATELY using microtask
-      // This happens before React can re-render
-      setTimeout(() => {
-        window.location.href = "/login";
-      }, 0);
-      
-    } catch (err) {
-      console.error("Logout error:", err);
-      
-      // Still redirect even if there's an error
-      setTimeout(() => {
-        window.location.href = "/login";
-      }, 0);
-    }
-  }, [removeSession, user, toast]);
+      console.log("✅ Logout cleanup complete");
+    }, 100);
+    
+  } catch (err) {
+    console.error("Logout error:", err);
+    // Still redirect even if there's an error
+    window.location.href = "/login";
+  }
+}, [removeSession, user]);
 
   // ==================== ORIGINAL AUTH LOGIC ====================
 
