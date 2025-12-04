@@ -155,7 +155,6 @@ const DashboardRouter: React.FC = () => {
   const { user, isDataStale } = useAuth();
   const isMobile = useIsMobile();
   
-  // Show refresh prompt if data is stale
   if (isDataStale) {
     return (
       <LoaderScreen 
@@ -165,7 +164,6 @@ const DashboardRouter: React.FC = () => {
     );
   }
   
-  // Show loading state while data is being fetched
   if (!user) {
     return (
       <LoaderScreen 
@@ -175,7 +173,6 @@ const DashboardRouter: React.FC = () => {
     );
   }
   
-  // Mobile-specific dashboards
   if (isMobile) {
     switch (user?.role) {
       case "dealer": return <MobileDealerDashboard />;
@@ -190,7 +187,6 @@ const DashboardRouter: React.FC = () => {
     }
   }
   
-  // Desktop dashboards
   switch (user?.role) {
     case "admin": return <AdminDashboard />;
     case "omc": return <OMCDashboard />;
@@ -210,7 +206,6 @@ const RouteHandler: React.FC<{
   const isMobile = useIsMobile();
   const { isDataLoading } = useAuth();
   
-  // Show loader during data loading
   if (isDataLoading) {
     return (
       <LoaderScreen 
@@ -235,15 +230,15 @@ const SuspenseLoader: React.FC<{ children: React.ReactNode }> = ({ children }) =
   </Suspense>
 );
 
-// 🚀 Main app content - FIXED LOGOUT
+// 🚀 Main app content - ULTIMATE FIX
 const AppContent: React.FC = () => {
   const { user, isLoading, isDataLoading, isSetupComplete, error } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
   const [initialLoad, setInitialLoad] = useState(true);
+  const [showAuthFlow, setShowAuthFlow] = useState(false);
 
   useEffect(() => {
-    // Hide initial loader after app is ready
     if (!isLoading && user !== undefined) {
       const timer = setTimeout(() => {
         setInitialLoad(false);
@@ -251,6 +246,24 @@ const AppContent: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [isLoading, user]);
+
+  // 🚀 CRITICAL: Handle logout redirect without flash
+  useEffect(() => {
+    // Check if we should show auth flow (no user, not loading)
+    if (!isLoading && !user && !showAuthFlow) {
+      // Use setTimeout to allow React to finish current render cycle
+      const timer = setTimeout(() => {
+        setShowAuthFlow(true);
+      }, 0);
+      
+      return () => clearTimeout(timer);
+    }
+    
+    // Reset if user logs back in
+    if (user && showAuthFlow) {
+      setShowAuthFlow(false);
+    }
+  }, [isLoading, user, showAuthFlow]);
 
   // Show initial app loader
   if (initialLoad) {
@@ -329,7 +342,6 @@ const AppContent: React.FC = () => {
     return (
       <PriceProvider>
         <Layout>
-          {/* 🚀 Subtle loading indicator for background updates */}
           {isDataLoading && (
             <div className="fixed top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-blue-700 z-50">
               <div className="h-full bg-blue-400 animate-pulse transition-all duration-300"></div>
@@ -570,33 +582,41 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // 🧭 Auth flow for unauthenticated users (including public verification route)
-  const currentPath = window.location.pathname;
-  const isPublicRoute = currentPath.includes('/verify/report');
-  
-  if (isPublicRoute) {
-    // Public verification route - no auth required
+  // 🧭 Show auth flow ONLY when explicitly triggered
+  if (showAuthFlow) {
+    const currentPath = window.location.pathname;
+    const isPublicRoute = currentPath.includes('/verify/report');
+    
+    if (isPublicRoute) {
+      return (
+        <div className="min-h-screen">
+          <Routes>
+            <Route path="/verify/report" element={<ReportVerification />} />
+            <Route path="*" element={<Navigate to="/verify/report" replace />} />
+          </Routes>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen">
         <Routes>
-          <Route path="/verify/report" element={<ReportVerification />} />
-          <Route path="*" element={<Navigate to="/verify/report" replace />} />
+          <Route path="/" element={<Welcome isSetupComplete={isSetupComplete} />} />
+          <Route path="/welcome" element={<Welcome isSetupComplete={isSetupComplete} />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/setup" element={<SetupWizard onComplete={() => window.location.reload()} />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </div>
     );
   }
 
-  // Normal auth flow for unauthenticated users
+  // 🚀 Show loader while deciding what to show (prevents flash)
   return (
-    <div className="min-h-screen">
-      <Routes>
-        <Route path="/" element={<Welcome isSetupComplete={isSetupComplete} />} />
-        <Route path="/welcome" element={<Welcome isSetupComplete={isSetupComplete} />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/setup" element={<SetupWizard onComplete={() => window.location.reload()} />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    </div>
+    <LoaderScreen 
+      message="Preparing Application..."
+      subMessage="Loading your session"
+    />
   );
 };
 
@@ -605,7 +625,6 @@ const App: React.FC = () => {
   const [appLoading, setAppLoading] = useState(true);
 
   useEffect(() => {
-    // Show initial loader for a minimum time for better UX
     const timer = setTimeout(() => {
       setAppLoading(false);
     }, 2000);
