@@ -1,6 +1,5 @@
 // pages/mobile/MobileDealerDashboard.tsx
-=======
-  >>>>>>> c1f1b4c0 (feat: Add mobile-optimized dashboard components with full functionality)  
+
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePrices } from "../../contexts/PriceContext";
