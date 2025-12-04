@@ -39,7 +39,7 @@ export interface AuthContextType {
 const SESSION_VERSION = '2.0.0';
 const SESSION_KEY = 'pumpguard-session-v2';
 
-// Admin email patterns that cannot reset password via public form
+// Admin email patterns
 const ADMIN_EMAIL_PATTERNS = [
   /^admin@/i,
   /@pumpguard\.com$/i,
@@ -72,28 +72,21 @@ const validatePasswordStrength = (password: string): { valid: boolean; error?: s
   if (password.length < 8) {
     return { valid: false, error: 'Password must be at least 8 characters long' };
   }
-
   if (!/[A-Z]/.test(password)) {
     return { valid: false, error: 'Password must contain at least one uppercase letter' };
   }
-
   if (!/[a-z]/.test(password)) {
     return { valid: false, error: 'Password must contain at least one lowercase letter' };
   }
-
   if (!/[0-9]/.test(password)) {
     return { valid: false, error: 'Password must contain at least one number' };
   }
-
   if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
     return { valid: false, error: 'Password must contain at least one special character' };
   }
-
-  // Check against common passwords
   if (COMMON_PASSWORDS.includes(password.toLowerCase())) {
     return { valid: false, error: 'Password is too common. Please choose a stronger password.' };
   }
-
   return { valid: true };
 };
 
@@ -101,16 +94,12 @@ const rateLimitCheck = (key: string, maxAttempts: number = 5, windowMinutes: num
   const now = Date.now();
   const storageKey = `rate_limit_${key}`;
   const attempts = JSON.parse(localStorage.getItem(storageKey) || '[]');
-  
-  // Remove attempts older than window
   const recentAttempts = attempts.filter((timestamp: number) => 
     now - timestamp < windowMinutes * 60 * 1000
   );
-  
   if (recentAttempts.length >= maxAttempts) {
     return false;
   }
-  
   recentAttempts.push(now);
   localStorage.setItem(storageKey, JSON.stringify(recentAttempts));
   return true;
@@ -120,8 +109,8 @@ const clearRateLimit = (key: string): void => {
   localStorage.removeItem(`rate_limit_${key}`);
 };
 
-// 🚀 Safe Supabase query wrapper to handle PKCE 404 errors
-const safeQuery = async <T,>(fn: () => Promise<T>, retryCount = 1): Promise<T> => {
+// 🚀 Safe Supabase query wrapper with PKCE 404 retry
+const safeQuery = async <T,>(fn: () => Promise<T>, retryCount = 2): Promise<T> => {
   try {
     return await fn();
   } catch (err: any) {
@@ -132,22 +121,18 @@ const safeQuery = async <T,>(fn: () => Promise<T>, retryCount = 1): Promise<T> =
     
     if (isPkce404 && retryCount > 0) {
       console.log('🔄 PKCE 404 detected, refreshing session and retrying...');
-      
       try {
-        // Refresh the session
-        await supabase.auth.refreshSession();
-        
-        // Wait a moment for session to update
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Retry the query
-        return await safeQuery(fn, retryCount - 1);
+        // Refresh session before retry
+        const { error: refreshError } = await supabase.auth.refreshSession();
+        if (!refreshError) {
+          console.log('✅ Session refreshed, retrying query...');
+          await new Promise(resolve => setTimeout(resolve, 300));
+          return await safeQuery(fn, retryCount - 1);
+        }
       } catch (refreshError) {
         console.error('Failed to refresh session:', refreshError);
-        throw err; // Throw original error
       }
     }
-    
     throw err;
   }
 };
@@ -159,21 +144,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isDataStale, setIsDataStale] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-
+  
   const { toast } = useToast();
   
-  // 🚀 SINGLE SOURCE OF TRUTH - use session.user directly
+  // 🚀 SINGLE SOURCE OF TRUTH
   const user = session?.user || null;
-  const isAuthenticated = !!user && !isLoggingOut;
+  const isAuthenticated = !!user;
 
-  // Refs to prevent dependency issues
+  // Refs
   const sessionRef = useRef(session);
   const isLoadingRef = useRef(isLoading);
   const refreshInProgressRef = useRef(false);
   const lastRefreshTimeRef = useRef<number>(0);
-  const logoutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const manualLogoutInProgressRef = useRef(false); // 🚀 NEW: Prevent auto-login after manual logout
+  const manualLogoutRef = useRef(false);
 
   // Keep refs updated
   useEffect(() => {
@@ -188,10 +171,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionStorage.removeItem(SESSION_KEY);
   }, [setSession]);
 
-  // 🚀 OPTIMIZED: Fetch user data with caching
+  // 🚀 Fetch user data
   const fetchUserData = useCallback(async (userId: string): Promise<User> => {
-    console.time("UserDataFetch");
-    
     const { data: profile, error: profileError } = await safeQuery(() =>
       supabase
         .from("profiles")
@@ -205,11 +186,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: sessionData } = await supabase.auth.getSession();
     const email = sessionData?.session?.user?.email || profile.email;
 
-    console.timeEnd("UserDataFetch");
     return { ...profile, email } as User;
   }, []);
 
-  // 🚀 SIMPLIFIED: Refresh data
+  // 🚀 Refresh data
   const refreshData = useCallback(async (): Promise<void> => {
     if (refreshInProgressRef.current || !user?.id) return;
 
@@ -219,7 +199,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const freshUserData = await fetchUserData(user.id);
       
-      // Only update if data changed
       const hasUserChanged = JSON.stringify(user) !== JSON.stringify(freshUserData);
       
       if (hasUserChanged) {
@@ -230,20 +209,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: true,
           version: SESSION_VERSION
         };
-        
         setSession(updatedSession);
-      } else {
-        // Just update last active time
-        if (session) {
-          const updatedSession: SessionData = {
-            ...session,
-            lastActiveAt: new Date().toISOString()
-          };
-          setSession(updatedSession);
-        }
+      } else if (session) {
+        const updatedSession: SessionData = {
+          ...session,
+          lastActiveAt: new Date().toISOString()
+        };
+        setSession(updatedSession);
       }
     } catch (error) {
       console.warn("Background refresh failed:", error);
+      setIsDataStale(true);
     } finally {
       refreshInProgressRef.current = false;
       setIsDataLoading(false);
@@ -252,10 +228,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // ==================== SUPABASE PKCE SESSION REFRESH FIX ====================
   useEffect(() => {
-    if (SUPABASE_REFRESH_INSTALLED) {
-      console.log("🚫 Supabase refresh handlers already installed");
-      return;
-    }
+    if (SUPABASE_REFRESH_INSTALLED) return;
 
     SUPABASE_REFRESH_INSTALLED = true;
     console.log("🛠️ Installing Supabase PKCE session refresh handlers");
@@ -264,9 +237,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const now = Date.now();
         // Don't refresh more than once per minute
-        if (now - lastRefreshTimeRef.current < 60000) {
-          return;
-        }
+        if (now - lastRefreshTimeRef.current < 60000) return;
 
         console.log("🔄 Refreshing Supabase session...");
         const { data, error } = await supabase.auth.refreshSession();
@@ -283,6 +254,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    // 1️⃣ When tab becomes visible
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         console.log("👁️ Tab became visible - refreshing session");
@@ -290,16 +262,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    // 2️⃣ When network reconnects
     const handleOnline = () => {
       console.log("🌐 Network reconnected - refreshing session");
       refreshSession();
     };
 
+    // 3️⃣ Periodic refresh every 20 minutes
     const periodicRefresh = setInterval(() => {
       console.log("⏰ Periodic session refresh");
       refreshSession();
-    }, 25 * 60 * 1000);
+    }, 20 * 60 * 1000);
 
+    // 4️⃣ Initial refresh
     refreshSession();
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -313,14 +288,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // ==================== PASSWORD RESET FUNCTIONALITY ====================
+  // ==================== PASSWORD RESET ====================
 
   const forgotPassword = useCallback(async (email: string): Promise<{ success: boolean; message: string }> => {
     try {
       const sanitizedEmail = sanitizeEmail(email);
       
-      const canProceed = rateLimitCheck(`forgot_password_${sanitizedEmail}`);
-      if (!canProceed) {
+      if (!rateLimitCheck(`forgot_password_${sanitizedEmail}`)) {
         return {
           success: false,
           message: 'Too many password reset attempts. Please try again in 15 minutes.'
@@ -328,7 +302,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (isAdminEmail(sanitizedEmail)) {
-        console.warn(`Admin password reset attempt blocked: ${sanitizedEmail}`);
         return {
           success: true,
           message: 'If an account exists with this email, you will receive reset instructions shortly.'
@@ -337,9 +310,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(
         sanitizedEmail,
-        {
-          redirectTo: `${window.location.origin}/auth/reset-password`,
-        }
+        { redirectTo: `${window.location.origin}/auth/reset-password` }
       );
 
       if (resetError) {
@@ -370,10 +341,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.valid) {
-        return {
-          success: false,
-          message: passwordValidation.error!
-        };
+        return { success: false, message: passwordValidation.error! };
       }
 
       const { data: { user }, error: tokenError } = await supabase.auth.verifyOtp({
@@ -439,17 +407,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.valid) {
-        return {
-          success: false,
-          message: passwordValidation.error!
-        };
+        return { success: false, message: passwordValidation.error! };
       }
 
       if (!user) {
-        return {
-          success: false,
-          message: 'User not authenticated'
-        };
+        return { success: false, message: 'User not authenticated' };
       }
 
       const { error: reauthError } = await supabase.auth.signInWithPassword({
@@ -458,10 +420,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (reauthError) {
-        return {
-          success: false,
-          message: 'Current password is incorrect'
-        };
+        return { success: false, message: 'Current password is incorrect' };
       }
 
       const { error: updateError } = await supabase.auth.updateUser({
@@ -470,10 +429,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (updateError) {
         console.error('Change password error:', updateError);
-        return {
-          success: false,
-          message: 'Failed to change password. Please try again.'
-        };
+        return { success: false, message: 'Failed to change password. Please try again.' };
       }
 
       await supabase
@@ -489,10 +445,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         description: "Your password has been updated successfully.",
       });
 
-      return {
-        success: true,
-        message: 'Password changed successfully!'
-      };
+      return { success: true, message: 'Password changed successfully!' };
 
     } catch (error: any) {
       console.error('Change password error:', error);
@@ -506,10 +459,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const updateUserProfile = useCallback(async (data: Partial<User>): Promise<{ success: boolean; message: string }> => {
     try {
       if (!user) {
-        return {
-          success: false,
-          message: 'User not authenticated'
-        };
+        return { success: false, message: 'User not authenticated' };
       }
 
       const { error } = await supabase
@@ -521,9 +471,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })
         .eq('id', user.id);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       await refreshData();
 
@@ -532,10 +480,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         description: "Your profile has been updated successfully.",
       });
 
-      return {
-        success: true,
-        message: 'Profile updated successfully!'
-      };
+      return { success: true, message: 'Profile updated successfully!' };
 
     } catch (error: any) {
       console.error('Update profile error:', error);
@@ -546,28 +491,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, refreshData, toast]);
 
-  // ==================== FIXED LOGOUT FUNCTION - NO AUTO-LOGIN ====================
+  // ==================== FIXED LOGOUT FUNCTION ====================
   const logout = useCallback(async () => {
-    // Prevent multiple logout calls
-    if (manualLogoutInProgressRef.current) {
-      console.log("🚫 Logout already in progress");
-      return;
-    }
-
-    manualLogoutInProgressRef.current = true;
-    setIsLoggingOut(true);
-
     try {
       console.log("🚪 Starting secure logout...");
       
-      // 🚀 CRITICAL: Set manual logout flag BEFORE any operations
+      // 🚀 Set manual logout flag
+      manualLogoutRef.current = true;
       sessionStorage.setItem('manual_logout', 'true');
       
-      // 1️⃣ Clear all local storage first
+      // 🚀 Clear ALL local storage immediately
       removeSession();
       localStorage.removeItem("pumpguard_offline_user");
       localStorage.removeItem("pumpguard_offline_email");
       localStorage.removeItem('supabase_last_refresh');
+      localStorage.removeItem('sb-localhost-auth-token'); // Supabase token
       
       // Clear rate limits
       if (user?.email) {
@@ -577,47 +515,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
       }
       
-      // 2️⃣ Sign out from Supabase
+      // 🚀 Sign out from Supabase
       await supabase.auth.signOut();
       
       console.log("✅ Supabase signout complete");
       
-      // 3️⃣ Show toast
+      // 🚀 Show toast
       toast({
         title: "Logged Out",
         description: "You have been successfully logged out.",
         duration: 2000,
       });
       
-      // 4️⃣ Update state
-      setIsSetupComplete(false);
-      
-      // 5️⃣ Wait a moment for state to clear
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // 6️⃣ Force reload to login page - THIS PREVENTS AUTO-LOGIN
+      // 🚀 Force reload to login page (NO FLASH!)
       window.location.href = "/login";
       
     } catch (err) {
       console.error("Logout error:", err);
-      // Still redirect even if there's an error
       window.location.href = "/login";
-    } finally {
-      // Clean up after a delay
-      setTimeout(() => {
-        manualLogoutInProgressRef.current = false;
-        setIsLoggingOut(false);
-        sessionStorage.removeItem('manual_logout');
-      }, 1000);
     }
   }, [removeSession, user, toast]);
 
-  // ==================== ORIGINAL AUTH LOGIC ====================
-
-  // 🚀 NUCLEAR: Initialize auth - RUNS ONCE PER APP LIFETIME
+  // ==================== AUTH INITIALIZATION ====================
   useEffect(() => {
     if (AUTH_INITIALIZED) {
-      console.log("🚫 Auth already initialized, skipping");
       setIsLoading(false);
       return;
     }
@@ -627,7 +548,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const initializeAuth = async () => {
       try {
-        console.log("🚀 NUCLEAR: Initializing auth system");
+        console.log("🚀 Initializing auth system");
 
         // Check existing session first
         if (session?.user) {
@@ -688,12 +609,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // 🚀 NUCLEAR: Auth state listener - WITH AUTO-LOGIN PREVENTION
+  // ==================== AUTH STATE LISTENER ====================
   useEffect(() => {
-    if (SESSION_LISTENER_ACTIVE) {
-      console.log("🚫 Session listener already active, skipping");
-      return;
-    }
+    if (SESSION_LISTENER_ACTIVE) return;
 
     SESSION_LISTENER_ACTIVE = true;
     let mounted = true;
@@ -705,8 +623,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       console.log("🔄 Auth state change:", event);
       
-      // 🚀 CRITICAL: Check if manual logout is in progress
-      if (manualLogoutInProgressRef.current || sessionStorage.getItem('manual_logout') === 'true') {
+      // 🚀 Skip if manual logout is in progress
+      if (manualLogoutRef.current || sessionStorage.getItem('manual_logout') === 'true') {
         console.log("🚫 Skipping auth listener during manual logout");
         return;
       }
@@ -715,8 +633,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         case "SIGNED_OUT":
           console.log("🔒 User signed out (automatic)");
           
-          // Only handle automatic signouts
-          if (!manualLogoutInProgressRef.current && window.location.pathname !== '/login') {
+          if (window.location.pathname !== '/login') {
             removeSession();
             localStorage.removeItem("pumpguard_offline_user");
             localStorage.removeItem("pumpguard_offline_email");
@@ -730,7 +647,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             
             setTimeout(() => {
               if (mounted) {
-                window.location.replace("/login");
+                window.location.href = "/login";
               }
             }, 1500);
           }
@@ -739,8 +656,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         case "SIGNED_IN":
           console.log("🔓 User signed in");
           
-          // 🚀 CRITICAL: Prevent auto-login if manual logout was just performed
-          if (manualLogoutInProgressRef.current) {
+          // 🚀 Block auto-login after manual logout
+          if (manualLogoutRef.current) {
             console.log("🚫 Blocking auto-login after manual logout");
             return;
           }
@@ -789,12 +706,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [removeSession, toast, fetchUserData, setSession]);
 
-  // ==================== CLEANUP ON UNMOUNT ====================
+  // ==================== CLEANUP ====================
   useEffect(() => {
     return () => {
-      if (logoutTimeoutRef.current) {
-        clearTimeout(logoutTimeoutRef.current);
-      }
+      // Reset manual logout flag on unmount
+      manualLogoutRef.current = false;
+      sessionStorage.removeItem('manual_logout');
     };
   }, []);
 
@@ -843,7 +760,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         setSession(newSession);
         setIsSetupComplete(true);
-        setIsLoggingOut(false);
         
         localStorage.setItem("pumpguard_offline_user", JSON.stringify(userData));
         localStorage.setItem("pumpguard_offline_email", email);
@@ -900,7 +816,7 @@ export function useAuth(): AuthContextType {
   return context;
 }
 
-// 🚀 Export safeQuery wrapper for use throughout the app
+// 🚀 Export safeQuery wrapper
 export { safeQuery };
 
 export default AuthProvider;
