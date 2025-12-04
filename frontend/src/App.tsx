@@ -73,7 +73,7 @@ import DailyReports from "./pages/reports/DailyReports";
 import SalesReports from "./pages/reports/SalesReports";
 
 // Verification
-import ReportVerification from "./pages/verify/report"; // ADDED
+import ReportVerification from "./pages/verify/report";
 
 // Settings
 import Settings from "./pages/settings/Settings";
@@ -150,34 +150,9 @@ const useIsMobile = () => {
   return isMobile;
 };
 
-// 🚀 Initial App Loader
-const InitialAppLoader: React.FC = () => {
-  const [showLoader, setShowLoader] = useState(true);
-
-  useEffect(() => {
-    // Show loader for at least 1.5 seconds for smooth UX
-    const timer = setTimeout(() => {
-      setShowLoader(false);
-    }, 1500);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (showLoader) {
-    return (
-      <LoaderScreen 
-        message="Starting PumpGuard..."
-        subMessage="Initializing application"
-      />
-    );
-  }
-
-  return null;
-};
-
 // 🚀 Dashboard Router with mobile detection
 const DashboardRouter: React.FC = () => {
-  const { user, isDataStale, refreshData } = useAuth();
+  const { user, isDataStale } = useAuth();
   const isMobile = useIsMobile();
   
   // Show refresh prompt if data is stale
@@ -206,7 +181,6 @@ const DashboardRouter: React.FC = () => {
       case "dealer": return <MobileDealerDashboard />;
       case "station_manager": return <MobileStationManagerDashboard />;
       case "attendant": return <MobileStationManagerDashboard />;
-      // For other roles, show loading while deciding
       default: return (
         <LoaderScreen 
           message="Preparing Mobile View..."
@@ -261,13 +235,13 @@ const SuspenseLoader: React.FC<{ children: React.ReactNode }> = ({ children }) =
   </Suspense>
 );
 
-// 🚀 Main app content - UPDATED WITH LOGOUT FLASH FIX
+// 🚀 Main app content - COMPLETELY FIXED
 const AppContent: React.FC = () => {
-  const { user, isLoading, isDataLoading, isSetupComplete, error } = useAuth();
+  const { user, isLoading, isDataLoading, isSetupComplete, error, logout } = useAuth();
   const isMobile = useIsMobile();
   const location = useLocation();
   const [initialLoad, setInitialLoad] = useState(true);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
 
   useEffect(() => {
     // Hide initial loader after app is ready
@@ -279,20 +253,45 @@ const AppContent: React.FC = () => {
     }
   }, [isLoading, user]);
 
-  const handleManualLogout = () => {
-    setIsLoggingOut(true);
-    const timeout = setTimeout(() => {
-      setIsLoggingOut(false);
-    }, 1000);
-    return () => clearTimeout(timeout);
-  };
+  // 🚀 CRITICAL FIX: Handle logout redirect without flash
+  useEffect(() => {
+    // Check if we're in a logout redirect state
+    const isLogoutRedirect = sessionStorage.getItem('logout_redirect') === 'true';
+    
+    if (isLogoutRedirect && !user && !isLoading) {
+      console.log("🚀 Handling logout redirect");
+      setIsRedirecting(true);
+      
+      // Clear the flag
+      sessionStorage.removeItem('logout_redirect');
+      
+      // Use setTimeout to ensure React finishes rendering before redirect
+      const timer = setTimeout(() => {
+        window.location.href = "/login";
+      }, 50);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [user, isLoading]);
+
+  // 🚀 Auto-redirect for unauthenticated users
+  useEffect(() => {
+    if (!isLoading && !user && !window.location.pathname.includes('/login') && 
+        !window.location.pathname.includes('/welcome') && 
+        !window.location.pathname.includes('/setup') &&
+        !window.location.pathname.includes('/verify/report')) {
+      console.log("🔄 No user found, redirecting to /login");
+      setIsRedirecting(true);
+      window.location.href = '/login';
+    }
+  }, [isLoading, user]);
 
   // Show initial app loader
-  if (initialLoad) {
+  if (initialLoad || isRedirecting) {
     return (
       <LoaderScreen 
-        message="Launching PumpGuard..."
-        subMessage="Initializing your session"
+        message={isRedirecting ? "Redirecting..." : "Launching PumpGuard..."}
+        subMessage={isRedirecting ? "Please wait..." : "Initializing your session"}
       />
     );
   }
@@ -358,8 +357,7 @@ const AppContent: React.FC = () => {
   }
 
   // ✅ Authenticated user: show full app
-  if (user && !isLoggingOut) {
-    // Choose layout based on device
+  if (user) {
     const Layout = isMobile ? MobileLayout : DesktopLayout;
     
     return (
@@ -377,7 +375,7 @@ const AppContent: React.FC = () => {
             <Route path="/" element={<DashboardRouter />} />
             <Route path="/dashboard" element={<DashboardRouter />} />
 
-            {/* Verification Route - ADDED */}
+            {/* Verification Route - Public access */}
             <Route path="/verify/report" element={
               <SuspenseLoader>
                 <ReportVerification />
@@ -606,18 +604,23 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // 🧭 Auth flow for unauthenticated users
-  if (isLoggingOut) {
+  // 🧭 Auth flow for unauthenticated users (including public verification route)
+  const currentPath = window.location.pathname;
+  const isPublicRoute = currentPath.includes('/verify/report');
+  
+  if (isPublicRoute) {
+    // Public verification route - no auth required
     return (
-      <LoaderScreen 
-        message="Logging out..."
-        subMessage="Please wait while we sign you out"
-      />
+      <div className="min-h-screen">
+        <Routes>
+          <Route path="/verify/report" element={<ReportVerification />} />
+          <Route path="*" element={<Navigate to="/verify/report" replace />} />
+        </Routes>
+      </div>
     );
   }
-  
-  console.log("👤 User not authenticated, showing auth flow");
-  
+
+  // Normal auth flow for unauthenticated users
   return (
     <div className="min-h-screen">
       <Routes>
@@ -625,7 +628,6 @@ const AppContent: React.FC = () => {
         <Route path="/welcome" element={<Welcome isSetupComplete={isSetupComplete} />} />
         <Route path="/login" element={<Login />} />
         <Route path="/setup" element={<SetupWizard onComplete={() => window.location.reload()} />} />
-        <Route path="/verify/report" element={<ReportVerification />} /> {/* ADDED for public access */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </div>
@@ -637,6 +639,7 @@ const App: React.FC = () => {
   const [appLoading, setAppLoading] = useState(true);
 
   useEffect(() => {
+    // Show initial loader for a minimum time for better UX
     const timer = setTimeout(() => {
       setAppLoading(false);
     }, 2000);
