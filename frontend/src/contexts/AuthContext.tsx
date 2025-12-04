@@ -159,13 +159,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isDataStale, setIsDataStale] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isLoggingOut, setIsLoggingOut] = useState(false); // 🚀 NEW: Track logout state
-  
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
   const { toast } = useToast();
   
   // 🚀 SINGLE SOURCE OF TRUTH - use session.user directly
   const user = session?.user || null;
-  const isAuthenticated = !!user && !isLoggingOut; // 🚀 Hide user during logout
+  const isAuthenticated = !!user && !isLoggingOut;
 
   // Refs to prevent dependency issues
   const sessionRef = useRef(session);
@@ -173,6 +173,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshInProgressRef = useRef(false);
   const lastRefreshTimeRef = useRef<number>(0);
   const logoutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const manualLogoutInProgressRef = useRef(false); // 🚀 NEW: Prevent auto-login after manual logout
 
   // Keep refs updated
   useEffect(() => {
@@ -250,7 +251,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, session, fetchUserData, setSession]);
 
   // ==================== SUPABASE PKCE SESSION REFRESH FIX ====================
-  // 🚀 CRITICAL: This fixes the PKCE 404 NOT_FOUND error issue
   useEffect(() => {
     if (SUPABASE_REFRESH_INSTALLED) {
       console.log("🚫 Supabase refresh handlers already installed");
@@ -276,8 +276,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           console.log("✅ Session refreshed successfully");
           lastRefreshTimeRef.current = now;
-          
-          // Update last refresh in localStorage for debugging
           localStorage.setItem('supabase_last_refresh', now.toString());
         }
       } catch (err) {
@@ -285,7 +283,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    // 1️⃣ When tab becomes visible again (user returns to app)
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         console.log("👁️ Tab became visible - refreshing session");
@@ -293,33 +290,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    // 2️⃣ When browser reconnects after offline
     const handleOnline = () => {
       console.log("🌐 Network reconnected - refreshing session");
       refreshSession();
     };
 
-    // 3️⃣ Periodic refresh every 25 minutes (tokens expire in 1 hour)
     const periodicRefresh = setInterval(() => {
       console.log("⏰ Periodic session refresh");
       refreshSession();
-    }, 25 * 60 * 1000); // 25 minutes
+    }, 25 * 60 * 1000);
 
-    // 4️⃣ Initial refresh on mount
     refreshSession();
 
-    // Add event listeners
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("online", handleOnline);
 
-    // Cleanup function
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("online", handleOnline);
       clearInterval(periodicRefresh);
       SUPABASE_REFRESH_INSTALLED = false;
     };
-  }, []); // 🚀 Empty dependency array - runs once
+  }, []);
 
   // ==================== PASSWORD RESET FUNCTIONALITY ====================
 
@@ -327,7 +319,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const sanitizedEmail = sanitizeEmail(email);
       
-      // Rate limiting check
       const canProceed = rateLimitCheck(`forgot_password_${sanitizedEmail}`);
       if (!canProceed) {
         return {
@@ -336,19 +327,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Check if it's an admin account
       if (isAdminEmail(sanitizedEmail)) {
-        // Log security event but don't reveal it's an admin account
         console.warn(`Admin password reset attempt blocked: ${sanitizedEmail}`);
-        
-        // Return generic success message (security through obscurity)
         return {
           success: true,
           message: 'If an account exists with this email, you will receive reset instructions shortly.'
         };
       }
 
-      // Use Supabase's built-in password reset
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(
         sanitizedEmail,
         {
@@ -364,7 +350,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Clear rate limit on success
       clearRateLimit(`forgot_password_${sanitizedEmail}`);
 
       return {
@@ -383,7 +368,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetPassword = useCallback(async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
     try {
-      // Validate password strength
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.valid) {
         return {
@@ -392,7 +376,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // First, verify the token and get the user
       const { data: { user }, error: tokenError } = await supabase.auth.verifyOtp({
         token_hash: token,
         type: 'recovery'
@@ -405,7 +388,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Check if this is an admin account
       const { data: profile } = await supabase
         .from('profiles')
         .select('email')
@@ -413,14 +395,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (profile && isAdminEmail(profile.email)) {
-        // Admin password reset must be done through admin panel
         return {
           success: false,
           message: 'Admin password cannot be reset through this form. Please contact system administrator.'
         };
       }
 
-      // Update password using Supabase
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword
       });
@@ -433,7 +413,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Update password change time in profile
       await supabase
         .from('profiles')
         .update({ 
@@ -458,7 +437,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const changePassword = useCallback(async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
     try {
-      // Validate password strength
       const passwordValidation = validatePasswordStrength(newPassword);
       if (!passwordValidation.valid) {
         return {
@@ -474,7 +452,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Re-authenticate with current password
       const { error: reauthError } = await supabase.auth.signInWithPassword({
         email: user.email!,
         password: currentPassword
@@ -487,7 +464,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Update password
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword
       });
@@ -500,7 +476,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Update password change time in profile
       await supabase
         .from('profiles')
         .update({ 
@@ -537,7 +512,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Update profile in Supabase
       const { error } = await supabase
         .from('profiles')
         .update({
@@ -551,7 +525,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
 
-      // Refresh user data
       await refreshData();
 
       toast({
@@ -573,25 +546,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, refreshData, toast]);
 
-  // ==================== FIXED LOGOUT FUNCTION - NO FLASH ====================
-const logout = useCallback(async () => {
-  try {
-    console.log("🚪 Starting instant logout...");
-    
-    // 🚀 CRITICAL: Set flag for AppContent to handle redirect
-    sessionStorage.setItem('logout_redirect', 'true');
-    
-    // 🚀 IMMEDIATE redirect to prevent React render
-    window.location.href = "/login";
-    
-    // 🚀 Clean up in background (fire and forget)
-    setTimeout(() => {
-      // Clear all storage
+  // ==================== FIXED LOGOUT FUNCTION - NO AUTO-LOGIN ====================
+  const logout = useCallback(async () => {
+    // Prevent multiple logout calls
+    if (manualLogoutInProgressRef.current) {
+      console.log("🚫 Logout already in progress");
+      return;
+    }
+
+    manualLogoutInProgressRef.current = true;
+    setIsLoggingOut(true);
+
+    try {
+      console.log("🚪 Starting secure logout...");
+      
+      // 🚀 CRITICAL: Set manual logout flag BEFORE any operations
+      sessionStorage.setItem('manual_logout', 'true');
+      
+      // 1️⃣ Clear all local storage first
       removeSession();
       localStorage.removeItem("pumpguard_offline_user");
       localStorage.removeItem("pumpguard_offline_email");
       localStorage.removeItem('supabase_last_refresh');
-      sessionStorage.removeItem('logout_redirect');
       
       // Clear rate limits
       if (user?.email) {
@@ -601,18 +577,40 @@ const logout = useCallback(async () => {
         });
       }
       
-      // Sign out from Supabase
-      supabase.auth.signOut().catch(() => {});
+      // 2️⃣ Sign out from Supabase
+      await supabase.auth.signOut();
       
-      console.log("✅ Logout cleanup complete");
-    }, 100);
-    
-  } catch (err) {
-    console.error("Logout error:", err);
-    // Still redirect even if there's an error
-    window.location.href = "/login";
-  }
-}, [removeSession, user]);
+      console.log("✅ Supabase signout complete");
+      
+      // 3️⃣ Show toast
+      toast({
+        title: "Logged Out",
+        description: "You have been successfully logged out.",
+        duration: 2000,
+      });
+      
+      // 4️⃣ Update state
+      setIsSetupComplete(false);
+      
+      // 5️⃣ Wait a moment for state to clear
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // 6️⃣ Force reload to login page - THIS PREVENTS AUTO-LOGIN
+      window.location.href = "/login";
+      
+    } catch (err) {
+      console.error("Logout error:", err);
+      // Still redirect even if there's an error
+      window.location.href = "/login";
+    } finally {
+      // Clean up after a delay
+      setTimeout(() => {
+        manualLogoutInProgressRef.current = false;
+        setIsLoggingOut(false);
+        sessionStorage.removeItem('manual_logout');
+      }, 1000);
+    }
+  }, [removeSession, user, toast]);
 
   // ==================== ORIGINAL AUTH LOGIC ====================
 
@@ -688,9 +686,9 @@ const logout = useCallback(async () => {
     return () => {
       mounted = false;
     };
-  }, []); // 🚀 EMPTY - runs once
+  }, []);
 
-  // 🚀 NUCLEAR: Auth state listener - SINGLE INSTANCE WITH LOGOUT FIX
+  // 🚀 NUCLEAR: Auth state listener - WITH AUTO-LOGIN PREVENTION
   useEffect(() => {
     if (SESSION_LISTENER_ACTIVE) {
       console.log("🚫 Session listener already active, skipping");
@@ -705,24 +703,20 @@ const logout = useCallback(async () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, authSession) => {
       if (!mounted) return;
       
-      // 🚀 CRITICAL: Skip if this is a manual logout
-      if (sessionStorage.getItem('manual_logout') === 'true') {
+      console.log("🔄 Auth state change:", event);
+      
+      // 🚀 CRITICAL: Check if manual logout is in progress
+      if (manualLogoutInProgressRef.current || sessionStorage.getItem('manual_logout') === 'true') {
         console.log("🚫 Skipping auth listener during manual logout");
-        // Clear the flag after processing
-        setTimeout(() => {
-          sessionStorage.removeItem('manual_logout');
-        }, 1000);
         return;
       }
       
-      console.log("🔄 Auth state change:", event);
-      
       switch (event) {
         case "SIGNED_OUT":
-          console.log("🔒 User signed out (automatic, not manual)");
+          console.log("🔒 User signed out (automatic)");
           
-          // Only handle automatic signouts (session expired, etc.)
-          if (window.location.pathname !== '/login' && !isLoggingOut) {
+          // Only handle automatic signouts
+          if (!manualLogoutInProgressRef.current && window.location.pathname !== '/login') {
             removeSession();
             localStorage.removeItem("pumpguard_offline_user");
             localStorage.removeItem("pumpguard_offline_email");
@@ -734,7 +728,6 @@ const logout = useCallback(async () => {
               duration: 3000,
             });
             
-            // Redirect after a brief delay
             setTimeout(() => {
               if (mounted) {
                 window.location.replace("/login");
@@ -744,8 +737,15 @@ const logout = useCallback(async () => {
           break;
 
         case "SIGNED_IN":
+          console.log("🔓 User signed in");
+          
+          // 🚀 CRITICAL: Prevent auto-login if manual logout was just performed
+          if (manualLogoutInProgressRef.current) {
+            console.log("🚫 Blocking auto-login after manual logout");
+            return;
+          }
+          
           if (authSession?.user) {
-            console.log("🔓 User signed in");
             try {
               const userData = await fetchUserData(authSession.user.id);
               const newSession: SessionData = {
@@ -759,7 +759,6 @@ const logout = useCallback(async () => {
               setSession(newSession);
               setIsSetupComplete(true);
               
-              // Cache for offline
               localStorage.setItem("pumpguard_offline_user", JSON.stringify(userData));
               localStorage.setItem("pumpguard_offline_email", authSession.user.email!);
             } catch (error) {
@@ -769,7 +768,7 @@ const logout = useCallback(async () => {
           break;
 
         case "TOKEN_REFRESHED":
-          console.log("♻️ Token refreshed - updating last refresh time");
+          console.log("♻️ Token refreshed");
           lastRefreshTimeRef.current = Date.now();
           localStorage.setItem('supabase_last_refresh', lastRefreshTimeRef.current.toString());
           break;
@@ -788,7 +787,7 @@ const logout = useCallback(async () => {
       SESSION_LISTENER_ACTIVE = false;
       subscription?.unsubscribe();
     };
-  }, [isLoggingOut, removeSession, toast, fetchUserData, setSession]);
+  }, [removeSession, toast, fetchUserData, setSession]);
 
   // ==================== CLEANUP ON UNMOUNT ====================
   useEffect(() => {
@@ -807,7 +806,6 @@ const logout = useCallback(async () => {
 
       const sanitizedEmail = sanitizeEmail(email);
       
-      // Rate limiting check
       if (!rateLimitCheck(`login_${sanitizedEmail}`)) {
         throw new Error('Too many login attempts. Please try again in 15 minutes.');
       }
@@ -845,9 +843,8 @@ const logout = useCallback(async () => {
         
         setSession(newSession);
         setIsSetupComplete(true);
-        setIsLoggingOut(false); // 🚀 Reset logout state
+        setIsLoggingOut(false);
         
-        // Cache for offline mode
         localStorage.setItem("pumpguard_offline_user", JSON.stringify(userData));
         localStorage.setItem("pumpguard_offline_email", email);
         
@@ -858,7 +855,6 @@ const logout = useCallback(async () => {
           description: `Welcome back, ${userData.name || userData.email}!`,
         });
         
-        // Clear rate limit on successful login
         clearRateLimit(`login_${sanitizedEmail}`);
       }
     } catch (err: any) {
@@ -874,7 +870,7 @@ const logout = useCallback(async () => {
     user,
     isAuthenticated,
     login,
-    logout, // 🚀 Now fixed - no more flash!
+    logout,
     forgotPassword,
     resetPassword,
     changePassword,
