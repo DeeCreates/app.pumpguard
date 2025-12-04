@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-// pages/mobile/MobileStationManagerDashboard.tsx
-=======
->>>>>>> c1f1b4c0 (feat: Add mobile-optimized dashboard components with full functionality)
 import React, { useState, useEffect, lazy, Suspense, useCallback, useRef, useMemo } from "react";
 import { supabase } from "../../utils/supabase-client";
 import { useAuth } from "../../contexts/AuthContext";
@@ -70,16 +66,9 @@ import {
   TrendingDown,
   AlertCircle,
   ChevronLeft,
-  ChevronRight,
   Home,
-  Menu,
-  X,
   LogOut,
-  Activity,
-  Shield,
-  Bell,
   FileText,
-  AlertCircle,
   Thermometer,
   Droplets,
   Zap,
@@ -416,67 +405,6 @@ const MobileHeader = ({
         >
           <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
-  isOnline, 
-  pendingSync, 
-  onMenuPress,
-  onSyncPress,
-  onRefreshPress,
-  isLoading
-}: { 
-  station: Station | null;
-  isOnline: boolean;
-  pendingSync: number;
-  onMenuPress: () => void;
-  onSyncPress: () => void;
-  onRefreshPress: () => void;
-  isLoading: boolean;
-}) => (
-  <div className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 py-3">
-    <div className="flex items-center justify-between">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onMenuPress}
-        className="rounded-full"
-      >
-        <Menu className="w-5 h-5" />
-      </Button>
-      <div className="flex-1 text-center px-2">
-        <h1 className="text-base font-semibold text-gray-900 truncate">
-          {station?.name || 'Station'}
-        </h1>
-        <div className="flex items-center justify-center gap-2 mt-1">
-          <div className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${isOnline ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-            {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            <span>{isOnline ? 'Online' : 'Offline'}</span>
-          </div>
-          {pendingSync > 0 && (
-            <div className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full">
-              {pendingSync} pending
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onRefreshPress}
-          disabled={isLoading}
-          className="rounded-full"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-        </Button>
-        {pendingSync > 0 && isOnline && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onSyncPress}
-            className="rounded-full"
-          >
-            <Upload className="w-4 h-4" />
-          </Button>
-        )}
       </div>
     </div>
   </div>
@@ -924,7 +852,7 @@ const MobileNavigationMenu = ({
   </div>
 );
 
-const MobilePumpPrices = ({ 
+const MobilePumpPricesWithRefresh = ({ 
   pumpPrices, 
   loading, 
   onRefresh 
@@ -1189,7 +1117,7 @@ const MobileExpensesCard = ({
   );
 };
 
-const MobileQuickActions = ({
+const MobileQuickActionsAlt = ({
   onStationCheck,
   onTankDipping,
   onInventory,
@@ -1555,6 +1483,7 @@ export function MobileStationManagerDashboard() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [station, setStation] = useState<Station | null>(null);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   
   // Data states (keep same as before)
   const [pumps, setPumps] = useState<Pump[]>([]);
@@ -2746,9 +2675,6 @@ export function MobileStationManagerDashboard() {
     if (!user?.station_id) return;
 
     // Clean up existing subscription
-  useEffect(() => {
-    if (!user?.station_id) return;
-
     if (realtimeSubscriptionRef.current) {
       realtimeSubscriptionRef.current.unsubscribe();
     }
@@ -2859,6 +2785,31 @@ export function MobileStationManagerDashboard() {
     await loadPumps();
   };
 
+  // Export functions
+  const handleExportSales = () => {
+    if (dailyReport?.sales.length) {
+      exportToCSV(dailyReport.sales, 'sales-report');
+    } else {
+      toast.error('No sales data to export');
+    }
+  };
+
+  const handleExportExpenses = () => {
+    if (expenses.length) {
+      exportToCSV(expenses, 'expenses-report');
+    } else {
+      toast.error('No expenses data to export');
+    }
+  };
+
+  const handleExportInventory = () => {
+    if (inventoryHistory.length) {
+      exportToCSV(inventoryHistory, 'inventory-report');
+    } else {
+      toast.error('No inventory data to export');
+    }
+  };
+
   if (isLoading() && !dailyReport) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -2889,23 +2840,6 @@ export function MobileStationManagerDashboard() {
         {/* Content Skeleton */}
         <div className="px-4 space-y-4">
           <Skeleton className="h-12 w-full rounded-xl" />
-  if (isLoading() && !dailyReport) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <Skeleton className="h-8 w-32" />
-            <Skeleton className="h-8 w-8 rounded-full" />
-          </div>
-        </div>
-        <div className="p-4">
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 rounded-xl" />
-            ))}
-          </div>
-          <Skeleton className="h-64 w-full rounded-xl mb-4" />
-          <Skeleton className="h-64 w-full rounded-xl" />
         </div>
       </div>
     );
@@ -3359,289 +3293,6 @@ export function MobileStationManagerDashboard() {
           <AlertCircle className="h-6 w-6" />
         </Button>
       </div>
-    <div className="min-h-screen bg-gray-50 pb-16">
-      <MobileHeader
-        station={station}
-        isOnline={isOnline}
-        pendingSync={pendingSync}
-        onMenuPress={() => setShowMobileMenu(true)}
-        onSyncPress={syncOfflineData}
-        onRefreshPress={async () => {
-          await loadDailyReport();
-          await loadPumpPrices(true);
-          await loadFuelStockCard();
-          await loadPumps();
-        }}
-        isLoading={isLoading()}
-      />
-
-      <MobileTabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
-
-      <div className="pb-20">
-        {activeTab === 'operations' && (
-          <>
-            <MobileStatsCard
-              dailyReport={dailyReport}
-              expenseStats={expenseStats}
-              fuelStockCard={fuelStockCard}
-              pumps={pumps}
-            />
-            
-            <MobilePumpPrices
-              pumpPrices={pumpPrices}
-              loading={loadingStates.prices}
-              onRefresh={() => loadPumpPrices(true)}
-            />
-            
-            <MobileSalesCard
-              dailyReport={dailyReport}
-              onRecordSale={() => setShowSalesDialog(true)}
-              onDebugPumps={debugPumpsTable}
-            />
-            
-            <MobileExpensesCard
-              expenses={expenses}
-              searchTerm={searchTerm}
-              filterStatus={filterStatus}
-              onSearchChange={setSearchTerm}
-              onFilterChange={setFilterStatus}
-              onAddExpense={() => setShowExpenseDialog(true)}
-              onUpdateStatus={handleUpdateExpenseStatus}
-              onDelete={handleDeleteExpense}
-            />
-            
-            <MobileQuickActions
-              onStationCheck={() => setShowStationCheckDialog(true)}
-              onTankDipping={() => setShowTankDippingDialog(true)}
-              onInventory={() => setShowInventoryDialog(true)}
-              onExpense={() => setShowExpenseDialog(true)}
-            />
-          </>
-        )}
-
-        {activeTab === 'financial' && (
-          <div className="px-4 mt-4">
-            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
-              <LazyBankDeposits 
-                stationId={user?.station_id || ''} 
-                banks={banks}
-                onBankAdded={loadBanks}
-                showAddBank={true}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {activeTab === 'inventory' && (
-          <div className="px-4 mt-4 space-y-4">
-            {/* Current Stock */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-3">Current Stock</h3>
-              <div className="space-y-3">
-                {fuelStockCard.map((item) => (
-                  <div key={item.product_id} className="p-3 bg-gray-50 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
-                        <p className="text-xs text-gray-600">
-                          Updated: {new Date(item.last_updated).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-blue-600">
-                          {item.current_stock?.toLocaleString()}{item.unit}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {fuelStockCard.length === 0 && (
-                  <div className="text-center py-4">
-                    <p className="text-sm text-gray-500">No stock data available</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Inventory History */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-900">Recent Stock History</h3>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setShowInventoryDialog(true)}
-                >
-                  <Plus className="w-3 h-3 mr-1" />
-                  Add
-                </Button>
-              </div>
-              <div className="space-y-3">
-                {inventoryHistory.slice(0, 3).map((item) => (
-                  <div key={item.id} className="p-3 bg-gray-50 rounded-lg">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{item.products?.name || 'Unknown'}</p>
-                        <p className="text-xs text-gray-600">
-                          {new Date(item.stock_date).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-gray-600">O: {item.opening_stock}L</p>
-                        <p className="text-sm text-gray-600">R: {item.received}L</p>
-                        <p className="text-sm font-semibold text-gray-900">C: {item.closing_stock}L</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {inventoryHistory.length === 0 && (
-                  <div className="text-center py-4">
-                    <p className="text-sm text-gray-500">No inventory history</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'equipment' && (
-          <div className="px-4 mt-4">
-            <Suspense fallback={<div className="h-64 flex items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin" /></div>}>
-              <LazyPumpCalibration 
-                stationId={user?.station_id || ''} 
-                pumps={pumps}
-              />
-            </Suspense>
-          </div>
-        )}
-
-        {activeTab === 'reports' && (
-          <div className="px-4 mt-4">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 mb-4">Export Reports</h3>
-              <div className="space-y-3">
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (dailyReport?.sales.length) {
-                      exportToCSV(dailyReport.sales, 'sales-report');
-                    } else {
-                      toast.error('No sales data to export');
-                    }
-                  }}
-                  disabled={!dailyReport?.sales.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Sales Report ({dailyReport?.sales.length || 0})
-                </Button>
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (expenses.length) {
-                      exportToCSV(expenses, 'expenses-report');
-                    } else {
-                      toast.error('No expenses data to export');
-                    }
-                  }}
-                  disabled={!expenses.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Expense Report ({expenses.length})
-                </Button>
-                <Button 
-                  className="w-full h-12" 
-                  variant="outline"
-                  onClick={() => {
-                    if (inventoryHistory.length) {
-                      exportToCSV(inventoryHistory, 'inventory-report');
-                    } else {
-                      toast.error('No inventory data to export');
-                    }
-                  }}
-                  disabled={!inventoryHistory.length}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Inventory Report ({inventoryHistory.length})
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Dialogs */}
-      <MobileSalesDialog
-        open={showSalesDialog}
-        onOpenChange={setShowSalesDialog}
-        salesForm={salesForm}
-        setSalesForm={setSalesForm}
-        pumps={pumps}
-        selectedPump={selectedPump}
-        setSelectedPump={setSelectedPump}
-        products={products}
-        user={user}
-        getStationPrice={getStationPrice}
-        calculateSalesAmount={calculateSalesAmount}
-        handleRecordSales={handleRecordSales}
-        submitting={submitting}
-        debugPumpsTable={debugPumpsTable}
-      />
-
-      {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-around">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'operations' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('operations')}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="text-xs mt-1">Operations</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'financial' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('financial')}
-          >
-            <DollarSign className="w-5 h-5" />
-            <span className="text-xs mt-1">Finance</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'inventory' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('inventory')}
-          >
-            <Package className="w-5 h-5" />
-            <span className="text-xs mt-1">Stock</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`flex flex-col items-center ${activeTab === 'reports' ? 'text-blue-600' : 'text-gray-600'}`}
-            onClick={() => setActiveTab('reports')}
-          >
-            <Download className="w-5 h-5" />
-            <span className="text-xs mt-1">Reports</span>
-          </Button>
-        </div>
-      </div>
-
-      <MobileSideMenu
-        show={showMobileMenu}
-        onClose={() => setShowMobileMenu(false)}
-        station={station}
-        user={user}
-        onNavigate={(path) => {
-          console.log('Navigate to:', path);
-          // Implement navigation logic here
-        }}
-      />
     </div>
   );
 }
