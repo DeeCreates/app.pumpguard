@@ -110,32 +110,33 @@ const clearRateLimit = (key: string): void => {
 };
 
 // 🚀 Safe Supabase query wrapper with PKCE 404 retry
-const safeQuery = async <T,>(fn: () => Promise<T>, retryCount = 2): Promise<T> => {
+const safeQuery = async <T,>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 500
+): Promise<T> => {
   try {
     return await fn();
   } catch (err: any) {
-    const errorMessage = String(err.message || '');
-    const isPkce404 = errorMessage.includes('404') || 
-                      errorMessage.includes('NOT_FOUND') || 
-                      errorMessage.includes('cpt1::');
-    
-    if (isPkce404 && retryCount > 0) {
-      console.log('🔄 PKCE 404 detected, refreshing session and retrying...');
+    const msg = String(err.message || '');
+    const isPkce404 = msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('cpt1::');
+
+    if (isPkce404 && retries > 0) {
+      console.warn('🔄 PKCE 404 detected, retrying after refresh...');
       try {
-        // Refresh session before retry
         const { error: refreshError } = await supabase.auth.refreshSession();
         if (!refreshError) {
-          console.log('✅ Session refreshed, retrying query...');
-          await new Promise(resolve => setTimeout(resolve, 300));
-          return await safeQuery(fn, retryCount - 1);
+          await new Promise(r => setTimeout(r, delayMs));
+          return await safeQuery(fn, retries - 1, delayMs * 2); // exponential backoff
         }
-      } catch (refreshError) {
-        console.error('Failed to refresh session:', refreshError);
+      } catch (refreshErr) {
+        console.error('Failed to refresh session during safeQuery retry', refreshErr);
       }
     }
     throw err;
   }
 };
+
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useSessionStorage<SessionData | null>(SESSION_KEY, null);
