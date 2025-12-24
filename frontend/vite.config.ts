@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vite'
+import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
@@ -10,16 +10,15 @@ export default defineConfig({
     },
   },
   build: {
-    // Add these options
     outDir: 'dist',
     emptyOutDir: true,
-    sourcemap: true, // ✅ generate source maps for debugging
+    sourcemap: true,
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),
       },
     },
   },
-  // Ensure base path is correct
-  base: './',
+  // 🔧 CHANGE THIS LINE: Use '/' for your domain
+  base: '/',
 })
