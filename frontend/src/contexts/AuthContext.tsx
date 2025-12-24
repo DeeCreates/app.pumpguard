@@ -137,7 +137,6 @@ const safeQuery = async <T,>(
   }
 };
 
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useSessionStorage<SessionData | null>(SESSION_KEY, null);
   const [isLoading, setIsLoading] = useState(true);
@@ -289,209 +288,512 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // ==================== PASSWORD RESET ====================
+// ==================== PASSWORD RESET ====================
 
-  const forgotPassword = useCallback(async (email: string): Promise<{ success: boolean; message: string }> => {
-    try {
-      const sanitizedEmail = sanitizeEmail(email);
+const forgotPassword = useCallback(async (email: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const sanitizedEmail = email.trim().toLowerCase();
+    
+    // Basic email validation
+    if (!sanitizedEmail || !/\S+@\S+\.\S+/.test(sanitizedEmail)) {
+      return {
+        success: false,
+        message: 'Please enter a valid email address.'
+      };
+    }
+    
+    if (!rateLimitCheck(`forgot_password_${sanitizedEmail}`)) {
+      return {
+        success: false,
+        message: 'Too many password reset attempts. Please try again in 15 minutes.'
+      };
+    }
+
+    // Admin email handling - don't actually send reset for admin emails
+    if (isAdminEmail(sanitizedEmail)) {
+      console.log('Admin email detected - simulating success without Supabase call');
+      // Simulate delay to match normal flow
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return {
+        success: true,
+        message: 'If an account exists with this email, you will receive reset instructions shortly.'
+      };
+    }
+
+    console.log('Sending password reset for:', sanitizedEmail, 'to domain: app.pumpguard.com');
+    
+    // IMPORTANT: Use your domain explicitly, not window.location.origin
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+      sanitizedEmail,
+      { 
+        redirectTo: 'https://app.pumpguard.com/auth/reset-password',
+        // Optional: Add captcha if configured
+        // captchaToken: await getCaptchaToken(),
+      }
+    );
+
+    if (resetError) {
+      console.error('Password reset request error:', resetError);
       
-      if (!rateLimitCheck(`forgot_password_${sanitizedEmail}`)) {
+      // Handle specific error cases
+      if (resetError.message?.includes('Email not confirmed')) {
         return {
           success: false,
-          message: 'Too many password reset attempts. Please try again in 15 minutes.'
+          message: 'Please confirm your email address before resetting password.'
         };
       }
-
-      if (isAdminEmail(sanitizedEmail)) {
-        return {
-          success: true,
-          message: 'If an account exists with this email, you will receive reset instructions shortly.'
-        };
-      }
-
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        sanitizedEmail,
-        { redirectTo: `${window.location.origin}/auth/reset-password` }
-      );
-
-      if (resetError) {
-        console.error('Password reset request error:', resetError);
+      
+      if (resetError.message?.includes('rate limit') || resetError.message?.includes('too many requests')) {
         return {
           success: false,
-          message: 'Failed to send reset instructions. Please try again later.'
+          message: 'Too many reset attempts. Please try again later.'
         };
       }
-
-      clearRateLimit(`forgot_password_${sanitizedEmail}`);
-
-      return {
-        success: true,
-        message: 'Password reset instructions have been sent to your email.'
-      };
-
-    } catch (error: any) {
-      console.error('Forgot password error:', error);
+      
+      if (resetError.status === 500) {
+        console.error('Supabase 500 error - email service issue');
+        return {
+          success: false,
+          message: 'Password reset service is temporarily unavailable. Please contact support@pumpguard.app'
+        };
+      }
+      
+      // Generic error
       return {
         success: false,
-        message: 'An unexpected error occurred. Please try again.'
+        message: resetError.message || 'Failed to send reset instructions. Please try again later.'
       };
     }
-  }, []);
 
-  const resetPassword = useCallback(async (token: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
-    try {
-      const passwordValidation = validatePasswordStrength(newPassword);
-      if (!passwordValidation.valid) {
-        return { success: false, message: passwordValidation.error! };
-      }
+    // Success - update rate limit and log
+    clearRateLimit(`forgot_password_${sanitizedEmail}`);
+    console.log('Password reset email sent successfully to:', sanitizedEmail);
 
-      const { data: { user }, error: tokenError } = await supabase.auth.verifyOtp({
-        token_hash: token,
-        type: 'recovery'
-      });
+    return {
+      success: true,
+      message: 'Password reset instructions have been sent to your email. Please check your inbox and spam folder.'
+    };
 
-      if (tokenError || !user) {
-        return {
-          success: false,
-          message: 'Invalid or expired reset token. Please request a new password reset.'
-        };
-      }
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('id', user.id)
-        .single();
-
-      if (profile && isAdminEmail(profile.email)) {
-        return {
-          success: false,
-          message: 'Admin password cannot be reset through this form. Please contact system administrator.'
-        };
-      }
-
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword
-      });
-
-      if (updateError) {
-        console.error('Password update error:', updateError);
-        return {
-          success: false,
-          message: 'Failed to update password. Please try again.'
-        };
-      }
-
-      await supabase
-        .from('profiles')
-        .update({ 
-          password_changed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
-
-      return {
-        success: true,
-        message: 'Password has been reset successfully! You can now log in with your new password.'
-      };
-
-    } catch (error: any) {
-      console.error('Reset password error:', error);
+  } catch (error: any) {
+    console.error('Forgot password unexpected error:', error);
+    
+    // Network errors or unexpected issues
+    if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
       return {
         success: false,
-        message: 'An unexpected error occurred. Please try again.'
+        message: 'Network error. Please check your internet connection and try again.'
       };
     }
-  }, []);
+    
+    return {
+      success: false,
+      message: 'An unexpected error occurred. Please try again or contact support@pumpguard.app'
+    };
+  }
+}, []);
 
-  const changePassword = useCallback(async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
-    try {
-      const passwordValidation = validatePasswordStrength(newPassword);
-      if (!passwordValidation.valid) {
-        return { success: false, message: passwordValidation.error! };
-      }
+const resetPassword = useCallback(async (newPassword: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return { 
+        success: false, 
+        message: passwordValidation.error! 
+      };
+    }
 
-      if (!user) {
-        return { success: false, message: 'User not authenticated' };
-      }
-
-      const { error: reauthError } = await supabase.auth.signInWithPassword({
-        email: user.email!,
-        password: currentPassword
-      });
-
-      if (reauthError) {
-        return { success: false, message: 'Current password is incorrect' };
-      }
-
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword
-      });
-
-      if (updateError) {
-        console.error('Change password error:', updateError);
-        return { success: false, message: 'Failed to change password. Please try again.' };
-      }
-
-      await supabase
-        .from('profiles')
-        .update({ 
-          password_changed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
-
-      toast({
-        title: "Password Changed",
-        description: "Your password has been updated successfully.",
-      });
-
-      return { success: true, message: 'Password changed successfully!' };
-
-    } catch (error: any) {
-      console.error('Change password error:', error);
+    // Get the current session (should be set from the reset email link)
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError) {
+      console.error('Session error:', sessionError);
       return {
         success: false,
-        message: 'An unexpected error occurred. Please try again.'
+        message: 'Session error. Please try the reset link again.'
       };
     }
-  }, [user, toast]);
 
-  const updateUserProfile = useCallback(async (data: Partial<User>): Promise<{ success: boolean; message: string }> => {
-    try {
-      if (!user) {
-        return { success: false, message: 'User not authenticated' };
-      }
-
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          full_name: data.name,
-          phone: data.phone,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', user.id);
-
-      if (error) throw error;
-
-      await refreshData();
-
-      toast({
-        title: "Profile Updated",
-        description: "Your profile has been updated successfully.",
-      });
-
-      return { success: true, message: 'Profile updated successfully!' };
-
-    } catch (error: any) {
-      console.error('Update profile error:', error);
+    if (!session?.user) {
+      console.error('No user in session - invalid or expired reset link');
       return {
         success: false,
-        message: error.message || 'Failed to update profile'
+        message: 'Invalid or expired reset link. The link may have been used already or has expired. Please request a new password reset.'
       };
     }
-  }, [user, refreshData, toast]);
 
+    const userEmail = session.user.email;
+    
+    // Check if user is admin
+    if (userEmail && isAdminEmail(userEmail)) {
+      // Sign out admin users immediately
+      await supabase.auth.signOut();
+      return {
+        success: false,
+        message: 'Admin password cannot be reset through this form. Please contact system administrator.'
+      };
+    }
+
+    console.log('Resetting password for user:', session.user.id, userEmail);
+
+    // Update the password
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword
+    });
+
+    if (updateError) {
+      console.error('Password update error:', updateError);
+      
+      if (updateError.message?.includes('Password should be different')) {
+        return {
+          success: false,
+          message: 'New password must be different from your current password.'
+        };
+      }
+      
+      if (updateError.message?.includes('weak_password')) {
+        return {
+          success: false,
+          message: 'Password is too weak. Please choose a stronger password.'
+        };
+      }
+      
+      return {
+        success: false,
+        message: updateError.message || 'Failed to update password. Please try again.'
+      };
+    }
+
+    // Update profile with password change timestamp
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ 
+        password_changed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', session.user.id);
+
+    if (profileError) {
+      console.error('Profile update error (non-critical):', profileError);
+      // Don't fail the whole operation if profile update fails
+    }
+
+    // Clear session and sign out to force re-login with new password
+    await supabase.auth.signOut();
+
+    // Log successful reset
+    console.log('Password reset successful for user:', session.user.id);
+
+    return {
+      success: true,
+      message: 'Password has been reset successfully! You can now log in with your new password.'
+    };
+
+  } catch (error: any) {
+    console.error('Reset password unexpected error:', error);
+    
+    // Handle specific error types
+    if (error.message?.includes('JWT expired')) {
+      return {
+        success: false,
+        message: 'Reset link has expired. Please request a new password reset.'
+      };
+    }
+    
+    return {
+      success: false,
+      message: 'An unexpected error occurred. Please try again or contact support@pumpguard.app'
+    };
+  }
+}, []);
+
+const changePassword = useCallback(async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  try {
+    if (!user) {
+      return { 
+        success: false, 
+        message: 'You must be logged in to change your password.' 
+      };
+    }
+
+    const passwordValidation = validatePasswordStrength(newPassword);
+    if (!passwordValidation.valid) {
+      return { 
+        success: false, 
+        message: passwordValidation.error! 
+      };
+    }
+
+    // Don't allow same password
+    if (currentPassword === newPassword) {
+      return {
+        success: false,
+        message: 'New password must be different from your current password.'
+      };
+    }
+
+    // Re-authenticate user first
+    const { error: reauthError } = await supabase.auth.signInWithPassword({
+      email: user.email!,
+      password: currentPassword
+    });
+
+    if (reauthError) {
+      if (reauthError.message?.includes('Invalid login credentials')) {
+        return { 
+          success: false, 
+          message: 'Current password is incorrect.' 
+        };
+      }
+      return { 
+        success: false, 
+        message: reauthError.message || 'Authentication failed. Please try again.' 
+      };
+    }
+
+    // Update to new password
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: newPassword
+    });
+
+    if (updateError) {
+      console.error('Change password error:', updateError);
+      
+      if (updateError.message?.includes('weak_password')) {
+        return {
+          success: false,
+          message: 'Password is too weak. Please choose a stronger password.'
+        };
+      }
+      
+      return { 
+        success: false, 
+        message: updateError.message || 'Failed to change password. Please try again.' 
+      };
+    }
+
+    // Update profile with password change timestamp
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ 
+        password_changed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', user.id);
+
+    if (profileError) {
+      console.error('Profile update error (non-critical):', profileError);
+      // Don't fail the whole operation
+    }
+
+    toast({
+      title: "Password Changed",
+      description: "Your password has been updated successfully.",
+      variant: "default"
+    });
+
+    // Refresh user data
+    await refreshData();
+
+    return { 
+      success: true, 
+      message: 'Password changed successfully!' 
+    };
+
+  } catch (error: any) {
+    console.error('Change password error:', error);
+    
+    toast({
+      title: "Error",
+      description: "Failed to change password. Please try again.",
+      variant: "destructive"
+    });
+    
+    return {
+      success: false,
+      message: error.message || 'An unexpected error occurred. Please try again.'
+    };
+  }
+}, [user, toast, refreshData]);
+
+const updateUserProfile = useCallback(async (data: Partial<User>): Promise<{ success: boolean; message: string }> => {
+  try {
+    if (!user) {
+      return { 
+        success: false, 
+        message: 'You must be logged in to update your profile.' 
+      };
+    }
+
+    // Validate input
+    const updateData: any = {};
+    
+    if (data.name !== undefined) {
+      const trimmedName = data.name.trim();
+      if (trimmedName.length < 2) {
+        return {
+          success: false,
+          message: 'Name must be at least 2 characters long.'
+        };
+      }
+      updateData.full_name = trimmedName;
+    }
+    
+    if (data.phone !== undefined) {
+      const trimmedPhone = data.phone.trim();
+      // Basic phone validation (adjust as needed)
+      if (trimmedPhone && !/^[\d\s\-\+\(\)]{10,20}$/.test(trimmedPhone)) {
+        return {
+          success: false,
+          message: 'Please enter a valid phone number.'
+        };
+      }
+      updateData.phone = trimmedPhone || null;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return {
+        success: false,
+        message: 'No changes to update.'
+      };
+    }
+
+    updateData.updated_at = new Date().toISOString();
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', user.id);
+
+    if (error) {
+      console.error('Profile update error:', error);
+      throw error;
+    }
+
+    // Refresh user data
+    await refreshData();
+
+    toast({
+      title: "Profile Updated",
+      description: "Your profile has been updated successfully.",
+      variant: "default"
+    });
+
+    return { 
+      success: true, 
+      message: 'Profile updated successfully!' 
+    };
+
+  } catch (error: any) {
+    console.error('Update profile error:', error);
+    
+    toast({
+      title: "Error",
+      description: "Failed to update profile.",
+      variant: "destructive"
+    });
+    
+    return {
+      success: false,
+      message: error.message || 'Failed to update profile. Please try again.'
+    };
+  }
+}, [user, refreshData, toast]);
+
+// Helper function to validate password strength (if not already defined elsewhere)
+const validatePasswordStrength = (password: string): { valid: boolean; error?: string } => {
+  if (!password || password.length < 8) {
+    return { 
+      valid: false, 
+      error: 'Password must be at least 8 characters long.' 
+    };
+  }
+  
+  if (!/[A-Z]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one uppercase letter.' 
+    };
+  }
+  
+  if (!/[a-z]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one lowercase letter.' 
+    };
+  }
+  
+  if (!/\d/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one number.' 
+    };
+  }
+  
+  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+    return { 
+      valid: false, 
+      error: 'Password must contain at least one special character.' 
+    };
+  }
+  
+  // Check for common weak passwords
+  const weakPasswords = [
+    'password', '12345678', 'qwerty123', 'admin123',
+    'welcome123', 'monkey123', 'dragon123', 'sunshine123'
+  ];
+  
+  if (weakPasswords.includes(password.toLowerCase())) {
+    return { 
+      valid: false, 
+      error: 'Password is too common. Please choose a stronger password.' 
+    };
+  }
+  
+  return { valid: true };
+};
+
+// Helper function to sanitize email
+const sanitizeEmail = (email: string): string => {
+  return email.trim().toLowerCase();
+};
+
+// Helper function to check if email is admin (implement based on your logic)
+const isAdminEmail = (email: string): boolean => {
+  // Implement your admin email check logic
+  // Example:
+  const adminEmails = ['admin@pumpguard.app', 'administrator@pumpguard.app'];
+  return adminEmails.includes(email.toLowerCase());
+};
+
+// Rate limiting helper functions
+const rateLimitCheck = (key: string): boolean => {
+  try {
+    const now = Date.now();
+    const lastAttempt = localStorage.getItem(`rate_limit_${key}`);
+    
+    if (lastAttempt) {
+      const timeSinceLastAttempt = now - parseInt(lastAttempt);
+      // 15 minutes cooldown
+      if (timeSinceLastAttempt < 15 * 60 * 1000) {
+        return false;
+      }
+    }
+    
+    localStorage.setItem(`rate_limit_${key}`, now.toString());
+    return true;
+  } catch (error) {
+    console.error('Rate limit check error:', error);
+    return true; // Fail open on error
+  }
+};
+
+const clearRateLimit = (key: string): void => {
+  try {
+    localStorage.removeItem(`rate_limit_${key}`);
+  } catch (error) {
+    console.error('Clear rate limit error:', error);
+  }
+};
   // ==================== FIXED LOGOUT FUNCTION ====================
   const logout = useCallback(async () => {
     try {
